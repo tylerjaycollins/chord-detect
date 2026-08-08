@@ -249,6 +249,55 @@ whole chord pipeline — 25s now, minutes once Demucs lands.
 5. Emit ChordPro with inline brackets (`[G]word`) — Ledgr's `LyricLine` /
    `ChordPair` shape exactly.
 
+### Spike results (2026-08-08) — measured, on `He Who Knew No Sin`
+
+Ran `MMS_FA` forced alignment on the **full mix**, no Demucs, against the real
+lyrics document. 336 words, 66 lines, 5:15 of audio. Model inference took 47s;
+alignment itself 0.1s.
+
+**As one global pass it is not usable.** Median per-word confidence 0.057, with
+97% of words below 0.5. Two lines were assigned durations of **32s and 35s** —
+impossible for a sung line — and later lines collapsed to 0.12s.
+
+**But the failure is localized, and the good parts are genuinely good.**
+Re-aligning three 30s windows in isolation:
+
+| Window | Median conf | Line durations | Verdict |
+|---|---|---|---|
+| Verse 1 (10–40s) | 0.413, 12% below 0.3 | 4.8–6.3s | plausible |
+| Bridge (226–256s) | 0.249, 62% below 0.3 | 2.4–3.5s | plausible |
+| Chorus 2 (280–315s) | 0.294, 50% below 0.3 | 2.3–5.5s | plausible |
+
+The windowed runs reproduced the *same* start times as the global run to within
+0.03s. So the global pass had those regions right all along; essentially all the
+damage is in one stretch, **roughly 37s–110s**, where the aligner had far more
+audio than words and stretched two lines across 67 seconds to cover it.
+
+**Conclusions that change the plan:**
+
+- [ ] **The first fix is not Demucs, it's windowing.** A single 5-minute pass
+      lets one bad region corrupt everything downstream. Section-at-a-time
+      alignment contains the damage — proven above, and it needs no new
+      dependency. The chicken-and-egg (windows need times, times need alignment)
+      resolves as two passes: align globally, detect the bad regions, re-align
+      those locally.
+- [ ] **Bad regions are trivially detectable.** A sung line lasting 32s, or
+      collapsing to 0.12s, needs no confidence score to spot. This is what makes
+      the correction UI tractable: flag the handful of broken lines rather than
+      asking for all 66 to be checked.
+- [ ] **The lyrics document is an arrangement, not a transcript.** `Bridge x2`
+      is written once and sung twice; `Band builds back in slowly` is a
+      performance direction sitting where a section label goes. Alignment needs
+      the literal sung sequence, so repeats must be expanded and directions
+      distinguished from sections before aligning. Ledgr's `classifySection`
+      handles `Bridge x2` and `Chorus - down chorus` correctly by leading word,
+      but would file the band direction as "other".
+- [ ] Work out what actually happens in the recording between ~37s and ~110s —
+      the document's order doesn't match what's sung there.
+- [ ] Demucs is still worth trying, but as a **confidence** play rather than a
+      rescue. Even the good windows sit at 0.25–0.41, well below the >0.7 typical
+      of speech, which is consistent with singing over a full band.
+
 - [ ] **Expect good-not-perfect, and design for it.** Forced aligners are
       trained on speech. Sung, reverb-heavy, harmonized worship vocals are the
       hard case — held syllables and melisma especially. Demucs closes much of

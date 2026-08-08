@@ -8,8 +8,25 @@ Living backlog for `chord-detect`. Newest thinking at the top of each section.
 Silicon. `README.md` covers usage; this file is the backlog and the record of
 *why* things are the way they are.
 
-**How to run it.** Double-click `~/Applications/Chord Detect.app`, or
+**How to run it.** Double-click `~/Applications/Overtone.app`, or
 `uv run chord-detect-app`, or `uv run chord-detect song.mp3` for the CLI.
+The app is called **Overtone**; the repo, CLI and Python package are still
+`chord-detect`, deliberately (nothing to migrate, no models re-downloaded).
+
+**The loop works end to end as of 2026-08-08.** Audio -> chords detected ->
+lyrics pasted -> chords placed by hand -> pushed to Ledgr as a real song item,
+updating in place on later pushes. `He Who Knew No Sin` is the worked example:
+83 chords, 13 sections, live at ledgr-sandy. Ledgr connection is configured in
+`~/.config/overtone/config.json` (0600).
+
+**Read this before touching `render.py`.** Run
+`uv run python scripts/check_js.py` before committing. The chart page's
+JavaScript lives inside Python strings, so Python interprets it first; both
+`{`/`}` in the `.format()` template and `\n`/`\'` in `_NAV_JS` have shipped as
+page-killing syntax errors. A syntax error breaks the *whole* page -- playback,
+tabs and nav links all at once -- so it never looks related to the change that
+caused it. Also bump `RENDER_VERSION` for template changes; stored charts are
+re-rendered on demand from `analysis.json` when it moves.
 
 **Where the parts live.** `pipeline.analyze()` is the single entry point every
 front end uses. Three interchangeable recognizers behind it — `cnnlstm.py`
@@ -17,9 +34,11 @@ front end uses. Three interchangeable recognizers behind it — `cnnlstm.py`
 `chords.py` (chroma templates, still powering the suggestion tools). Models are
 cloned on demand into `~/.cache/chord-detect/`.
 
-**Division of labour with Ledgr.** This project does the part that needs audio;
-Ledgr owns lyrics, chord-over-word placement, and printing. `--chordpro` is the
-handoff. Don't build a chart editor here — see the section below.
+**Division of labour with Ledgr.** Overtone does everything needing the audio,
+*including* chord-over-word placement, which is done by hand against playback
+(see "The editor" below — the earlier "don't build an editor here" decision was
+reversed, with reasons). Ledgr owns arrangement, transposition for the band,
+printing and sharing.
 
 **The one thing to keep in mind.** Accuracy is scored against published chord
 charts, which compares *vocabulary and duration but not timing*. It cannot tell
@@ -558,6 +577,30 @@ being a separate mode: change the chord, then place it.
       measurements (59% exact word placement). Kept in the tree because the
       windowing findings are worth something and it may return as a pre-fill
       once chord editing lands — but nothing should depend on it.
+
+## Next up (start here)
+
+- [ ] **Chord editing while placing.** The biggest remaining gap. Detection
+      leaves extra chords, wrong chords, and chords the ear disagrees with, and
+      Pinned currently offers no way to fix any of them mid-flow — you place
+      what you're given and correct it in Ledgr. See "Chord editing" below.
+- [ ] **Clean lyrics alongside the chart in Ledgr.** The pushed ChordPro splits
+      words (`wo[C]rd`) so chords centre, which corrupts the text. Harmless
+      today because lyrics live in a separate file, but Ledgr should hold an
+      intact copy. **Finding worth keeping:** Ledgr *has* a tabs mechanism
+      (ADR-095, `<!-- tab: Title -->` markers in one markdown body) whose
+      documented use case is several lyric versions on one song — but the
+      `song` type spends its single capability slot on the chord canvas
+      (`canvasIdForType("song") === "chord"`), and tab content in a chordpro
+      body would be parsed as chart lines. So this needs a Ledgr-side change
+      (a lyrics section on the song type) or a separate linked `note` item.
+      Ask Ledgr before building the workaround.
+- [ ] **Auto-scroll the placement views during playback.** On a long song you
+      scroll by hand to keep up. The Lyrics tab already follows the playhead;
+      reuse that.
+- [ ] **Rotate the Ledgr token** — it was pasted into a chat transcript.
+      `node scripts/make-token.mjs overtone api` in the Ledgr repo, swap the
+      `LEDGR_API_TOKENS` entry, update `~/.config/overtone/config.json`.
 
 ## Settings, and where placement rendering belongs
 

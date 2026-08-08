@@ -565,6 +565,11 @@ _NAV_JS = """
 
     function key(l, w) { return l + ':' + w; }
 
+    function appendIntro(token) {
+      var base = intro.replace(/\\s+$/, '');
+      return base ? base + ' ' + token : token;
+    }
+
     // Spell a pitch class without re-applying the capo. `spell()` subtracts it,
     // which is right for a detected chord but wrong for one derived from the
     // key we're already playing in.
@@ -613,9 +618,12 @@ _NAV_JS = """
     function save() {
       var rows = Object.keys(placed).map(function (k) {
         var parts = k.split(':');
+        var here = placed[k];
         return {
           line: parseInt(parts[0], 10), word: parseInt(parts[1], 10),
-          chord: placed[k].chord, t: placed[k].t
+          // Save what's on screen, so the export matches the shapes chosen.
+          chord: here.r == null ? here.chord : spell(here.r, here.q),
+          t: here.t
         };
       });
       return fetch('/placement/' + songId + '/' + mode, {
@@ -636,8 +644,17 @@ _NAV_JS = """
           '<span class="pnext">Sounding now: <b>' +
           (live ? spell(live.r, live.q) : '—') + '</b></span>' +
           '<button class="small go" data-act="place">Place it</button>' +
-          '<span class="phelp">then click the word &mdash; or click a word to ' +
+          '<span class="phelp">then click a word &mdash; or click a word to ' +
           'place what&rsquo;s sounding there</span>' +
+          // The intro has no words to click, so it gets its own way in: append
+          // the sounding chord, a held beat, or a bar line, straight into the
+          // bar notation at the top.
+          '<span class="introadd">Intro: ' +
+          '<button class="small" data-act="i-chord">+ chord</button>' +
+          '<button class="small" data-act="i-beat">+ /</button>' +
+          '<button class="small" data-act="i-bar">+ |</button>' +
+          '<button class="small" data-act="i-del">&larr;</button>' +
+          '</span>' +
           '<button class="small" data-act="undo">Undo last</button>' + tail;
       } else {
         bar.innerHTML =
@@ -714,7 +731,9 @@ _NAV_JS = """
           if (here) {
             var c = document.createElement('span');
             c.className = 'pchord';
-            c.textContent = here.chord;
+            // Re-spell for the shapes currently selected, so changing capo
+            // moves every placed chord with it.
+            c.textContent = here.r == null ? here.chord : spell(here.r, here.q);
             slot.appendChild(c);
             slot.classList.add('has');
           }
@@ -739,6 +758,17 @@ _NAV_JS = """
       status();
     }
 
+    // Store pitch, not just a name. A chord written down as "C" in G shapes
+    // has to become "A" when the capo moves, so the placement has to remember
+    // what note it was -- keeping only the label freezes it at the spelling it
+    // happened to have when placed.
+    function remember(label, t) {
+      var parsed = parseChord(label);
+      return parsed
+        ? { chord: label, r: (parsed.root + capo) % 12, q: parsed.q, t: t }
+        : { chord: label, r: null, q: null, t: t };
+    }
+
     function put(li, wi) {
       if (mode === 'pinned') {
         // Whatever was armed by "Place it", else whatever is sounding now, so
@@ -746,11 +776,11 @@ _NAV_JS = """
         var row = pick ? null : chordAt(audio.currentTime || 0);
         var label = pick || (row ? spell(row.r, row.q) : null);
         if (!label) return;
-        placed[key(li, wi)] = { chord: label, t: row ? row.t : null };
+        placed[key(li, wi)] = remember(label, row ? row.t : null);
         pick = null;
       } else {
         if (!pick) return;
-        placed[key(li, wi)] = { chord: pick, t: null };
+        placed[key(li, wi)] = remember(pick, null);
       }
       history.push(key(li, wi));
       dirty = true;
@@ -775,6 +805,19 @@ _NAV_JS = """
       if (act === 'place') {
         var row = chordAt(audio.currentTime || 0);
         if (row) { pick = spell(row.r, row.q); status(); }
+      }
+      if (act.indexOf('i-') === 0) {
+        var live = chordAt(audio.currentTime || 0);
+        if (act === 'i-chord' && live) intro = appendIntro(spell(live.r, live.q));
+        if (act === 'i-beat') intro = appendIntro('/');
+        if (act === 'i-bar') intro = appendIntro('|');
+        if (act === 'i-del') {
+          var bits = intro.trim().split(/\\s+/);
+          bits.pop();
+          intro = bits.join(' ');
+        }
+        dirty = true;
+        draw();
       }
       if (act === 'undo') {
         var last = history.pop();
@@ -829,6 +872,14 @@ _NAV_JS = """
   }
 
   var PLACERS = { manual: placement('manual'), pinned: placement('pinned') };
+
+  // Changing capo or shapes re-spells every chord on the page; the placement
+  // views hold chords too, so they have to be told.
+  window.__refreshPlacers = function () {
+    Object.keys(PLACERS).forEach(function (mode) {
+      if (PLACERS[mode]) PLACERS[mode].redraw();
+    });
+  };
   Object.keys(PLACERS).forEach(function (mode) {
     var tab = document.querySelector('.tabs button[data-view="' + mode + '"]');
     if (tab && PLACERS[mode]) {
@@ -868,7 +919,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 11
+RENDER_VERSION = 12
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -1226,6 +1277,9 @@ _TEMPLATE = """<!doctype html>
     }}
     refreshNow();
     if (!suggest.hidden) showSuggestions(audio.currentTime || 0);
+    // Placement views carry chords too -- both the palette of what can be
+    // placed and everything already placed have to follow the shapes.
+    if (window.__refreshPlacers) window.__refreshPlacers();
   }}
 
   function setCapo(value) {{

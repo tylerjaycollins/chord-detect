@@ -24,7 +24,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+)
 
 from . import ledgr
 from .chords import ChordRecognizerConfig
@@ -335,13 +340,30 @@ def audio(job_id: str) -> FileResponse:
 
 
 @app.get("/chordpro/{job_id}")
-def chordpro(job_id: str) -> FileResponse:
-    path = CACHE / job_id / "song.cho"
+def chordpro(job_id: str):
+    """The ChordPro for this song -- the same text the Ledgr upload sends.
+
+    Hand-placed chords win over automatic alignment, which wins over bar
+    notation. Deliberately the same order the upload uses: a download that
+    disagreed with what got uploaded would be worse than no download.
+    """
+    folder = CACHE / job_id
+    name_file = folder / "name.txt"
+    name = name_file.read_text().strip() if name_file.exists() else "song"
+
+    for build in (_placed_chordpro, _aligned_chordpro):
+        text = build(folder, name)
+        if text:
+            return PlainTextResponse(
+                text,
+                headers={
+                    "content-disposition": f'attachment; filename="{name}.cho"'
+                },
+            )
+
+    path = folder / "song.cho"
     if not path.exists():
         raise HTTPException(404, "Not built yet")
-    name = (CACHE / job_id / "name.txt").read_text() if (
-        CACHE / job_id / "name.txt"
-    ).exists() else "song"
     return FileResponse(path, filename=f"{name}.cho", media_type="text/plain")
 
 

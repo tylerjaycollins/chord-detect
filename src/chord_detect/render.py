@@ -947,9 +947,30 @@ _NAV_JS = """
   // the common no-token case is a hidden button rather than a failed click.
   fetch('/ledgr').then(function (r) { return r.json(); }).then(function (cfg) {
     var btn = document.getElementById('toledgr');
-    if (!btn || !cfg.configured) return;
+    if (!btn) return;
     var id = window.location.pathname.split('/').pop();
     btn.hidden = false;
+    // Shown even without a token, with the setup step as the tooltip. Hiding it
+    // made the feature invisible rather than obviously-not-configured.
+    if (!cfg.configured) {
+      btn.textContent = "Ledgr not connected";
+      btn.title = "Needs an api-scoped LEDGR_API_TOKEN. Target: " + cfg.target;
+      btn.addEventListener('click', function () {
+        window.alert(
+          [
+            "Ledgr isn't connected yet.",
+            "",
+            "1. In Ledgr, add an api-scoped token to LEDGR_API_TOKENS:",
+            "     overtone:api:<random hex>",
+            "   (an mcp-scoped token is refused)",
+            "2. Set LEDGR_API_OWNER_UPN on the Ledgr server.",
+            "3. Start Overtone with LEDGR_API_TOKEN=<that same random hex>",
+            "",
+            "Target: " + cfg.target + "   (override with LEDGR_URL)"
+          ].join("\\n"));
+      });
+      return;
+    }
     btn.title = 'Send this chart to ' + cfg.target;
     btn.addEventListener('click', function () {
       btn.disabled = true;
@@ -975,7 +996,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 14
+RENDER_VERSION = 15
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

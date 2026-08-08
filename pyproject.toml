@@ -1,0 +1,37 @@
+[project]
+name = "chord-detect"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "tylerjaycollins", email = "tylerjms7@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.141.1",
+    "h5py>=3.16.0",
+    "joblib>=1.5.3",
+    "librosa>=0.11.0",
+    "mir-eval>=0.8.2",
+    "numpy>=2.4.6",
+    "pretty-midi>=0.2.11.post0",
+    "pydub>=0.25.1",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "scikit-learn>=1.9.0",
+    "scipy>=1.17.1",
+    "soundfile>=0.14.0",
+    "torch>=2.13.0",
+    "torchaudio>=2.11.0",
+    "typer>=0.27.1",
+    "uvicorn>=0.52.1",
+]
+
+[project.scripts]
+chord-detect = "chord_detect.cli:app"
+chord-detect-app = "chord_detect.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"

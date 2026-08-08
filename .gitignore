@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test audio stays local -- recordings don't belong in git, and some are
+# commercial. Annotations (*.lab) are ours and DO get committed, so the eval
+# set is reproducible for anyone who has the same audio.
+testdata/*
+!testdata/README.md
+!testdata/*.lab
+
+# Generated charts (derived from local audio)
+charts/

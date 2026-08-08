@@ -556,6 +556,7 @@ _NAV_JS = """
 
     var LINES = [];          // {label, words:[..]}
     var placed = {};         // "line:word" -> {chord, t}
+    var intro = '';          // bar notation, e.g. "Em / / G | Em / / G"
     var queue = [];          // pinned: the detected chord run
     var at = 0;              // pinned: position in that run
     var pick = null;         // manual: chord awaiting a word
@@ -589,7 +590,7 @@ _NAV_JS = """
       });
       return fetch('/placement/' + songId + '/' + mode, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ placements: rows })
+        body: JSON.stringify({ placements: rows, intro: intro })
       }).then(function () { dirty = false; status(); });
     }
 
@@ -624,6 +625,35 @@ _NAV_JS = """
 
     function draw() {
       wrap.innerHTML = '';
+
+      // Every song gets an intro whether or not the lyrics mention one, since
+      // there are always some bars before the first word. It's typed as bars
+      // rather than placed on words, because there are no words yet.
+      var introWrap = document.createElement('div');
+      introWrap.className = 'introbox';
+      var introLabel = document.createElement('div');
+      introLabel.className = 'lsection';
+      introLabel.textContent = 'Intro';
+      introWrap.appendChild(introLabel);
+      var introField = document.createElement('input');
+      introField.type = 'text';
+      introField.className = 'introin';
+      introField.value = intro;
+      introField.placeholder = 'Em / / G | Em / / G';
+      introField.spellcheck = false;
+      introField.addEventListener('input', function () {
+        intro = introField.value;
+        dirty = true;
+      });
+      introWrap.appendChild(introField);
+      var hint = document.createElement('div');
+      hint.className = 'introhint';
+      hint.textContent =
+        'One bar per group, one token per beat. "/" holds the previous chord. ' +
+        'Separate bars with "|".';
+      introWrap.appendChild(hint);
+      wrap.appendChild(introWrap);
+
       var section = null;
       LINES.forEach(function (line, li) {
         if (line.label !== section) {
@@ -712,6 +742,7 @@ _NAV_JS = """
             .then(function (r) { return r.json(); })
             .then(function (p) {
               placed = {};
+              intro = p.intro || '';
               (p.placements || []).forEach(function (row) {
                 placed[key(row.line, row.word)] = { chord: row.chord, t: row.t };
               });
@@ -778,7 +809,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 9
+RENDER_VERSION = 10
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -897,6 +928,12 @@ _TEMPLATE = """<!doctype html>
   .pchord {{ position: absolute; top: 1px; left: 3px; color: var(--gold);
     font-size: .76rem; font-weight: 700; white-space: nowrap; }}
   .ptext {{ font-size: .98rem; }}
+  .introbox {{ margin-bottom: 18px; }}
+  .introin {{ width: 100%; background: var(--cell); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .92rem; letter-spacing: .02em; }}
+  .introhint {{ color: var(--dim); font-size: .72rem; margin-top: 5px; }}
 
   /* Transport */
   .transport {{

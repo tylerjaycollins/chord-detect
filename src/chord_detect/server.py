@@ -454,6 +454,14 @@ def _placed_chordpro(folder: Path, title: str) -> str | None:
     if meta.get("meter"):
         out.append(f"{{time: {meta['meter']}/4}}")
 
+    # Every song has an intro, and it has no words to hang chords on -- so it's
+    # written as bars rather than placed, and emitted before the sung sections.
+    intro = _bars_line(data.get("intro") or "")
+    if intro:
+        out.append("")
+        out.append("{section: Intro}")
+        out.append(intro)
+
     section_label = None
     for index, (label, text) in enumerate(flat):
         if label != section_label:
@@ -672,10 +680,33 @@ async def put_placement(job_id: str, mode: str, request: Request) -> JSONRespons
 
         stamp = lyrics_hash(lyrics_file.read_text())
 
+    intro = payload.get("intro")
     _placement_file(folder, mode).write_text(
-        json.dumps({"placements": cleaned, "lyrics_hash": stamp, "mode": mode})
+        json.dumps(
+            {
+                "placements": cleaned,
+                "intro": intro if isinstance(intro, str) else "",
+                "lyrics_hash": stamp,
+                "mode": mode,
+            }
+        )
     )
     return JSONResponse({"saved": True, "count": len(cleaned)})
+
+
+def _bars_line(text: str) -> str:
+    """Normalize typed bar notation into Ledgr's BarsLine form.
+
+    Players write intros as `Em / / G | Em / / G` -- one bar per group, one
+    token per beat, `/` where the previous chord is still sounding. Ledgr's
+    parser wants the same thing with the outer pipes present, so a bar typed
+    without them still lands correctly.
+    """
+    bars = [bar.strip() for bar in text.split("|")]
+    bars = [" ".join(bar.split()) for bar in bars if bar.strip()]
+    if not bars:
+        return ""
+    return "| " + " | ".join(bars) + " |"
 
 
 @app.post("/ledgr/{job_id}")

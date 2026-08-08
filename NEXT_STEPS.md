@@ -273,6 +273,25 @@ The windowed runs reproduced the *same* start times as the global run to within
 damage is in one stretch, **roughly 37s–110s**, where the aligner had far more
 audio than words and stretched two lines across 67 seconds to cover it.
 
+**Anchored alignment settles it (same day).** Given two anchors by ear — Verse 1's
+last line at ~0:35, Verse 3 at ~1:45 — and aligning *only* that 74s window
+against *only* the words inside it (Verse 2, Pre-Chorus, Chorus 1):
+
+| | Global pass | Anchored window |
+|---|---|---|
+| Implausible lines | many | **0 of 17** |
+| Median line duration | wild (0.4s–35s) | **2.80s** |
+| Median confidence | 0.034 | **0.410** |
+
+Best line hit 0.749, which is speech-grade. Chorus 1 lands 78.1s–103.1s, putting
+Verse 3 at ~105s — matching the 1:45 heard by ear, independently.
+
+**So the lyrics document was right all along.** A hypothesis that the recording
+skipped the first Chorus was tested by dropping it: alignment got *worse*
+(Verse 2 lines blew out to 13s/20s/32.5s). The document's order stands; the
+global pass was simply drifting. Neither Demucs nor a document edit was needed —
+only windowing.
+
 **Conclusions that change the plan:**
 
 - [ ] **The first fix is not Demucs, it's windowing.** A single 5-minute pass

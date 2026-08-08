@@ -142,6 +142,20 @@ def _run(job: Job, audio_path: Path, out_dir: Path, options: dict) -> None:
                         measures_per_section=16)
         )
         (out_dir / "analysis.json").write_text(analysis.to_json())
+        # What the chart was rendered *with*, so it can be rebuilt later from
+        # analysis.json without re-analyzing the audio.
+        (out_dir / "render.json").write_text(
+            json.dumps(
+                {
+                    "version": RENDER_VERSION,
+                    "capo": capo,
+                    "shift": shift,
+                    "shapes": chosen_shape,
+                    "source_key": original_key if shift else None,
+                    "name": job.name,
+                }
+            )
+        )
         job.stage = "Done"
         job.fraction = 1.0
     except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
@@ -253,10 +267,64 @@ def status(job_id: str) -> JSONResponse:
 
 @app.get("/chart/{job_id}", response_class=HTMLResponse)
 def chart(job_id: str) -> str:
-    path = CACHE / job_id / "chart.html"
+    """Serve a chart, rebuilding it first if it was rendered by older code.
+
+    Charts are written once at analysis time, so a renderer fix would otherwise
+    never reach a song already in the library -- and recovering it would mean
+    re-analyzing audio whose answers are already on disk. That is exactly how a
+    fixed page kept being served broken. `analysis.json` has everything the
+    renderer needs, so a stale chart is rebuilt here instead.
+    """
+    folder = CACHE / job_id
+    path = folder / "chart.html"
     if not path.exists():
         raise HTTPException(404, "That chart hasn't been built yet.")
+
+    stamp_file = folder / "render.json"
+    stamp = json.loads(stamp_file.read_text()) if stamp_file.exists() else {}
+    if stamp.get("version") != RENDER_VERSION:
+        rebuilt = _rerender(folder, job_id, stamp)
+        if rebuilt is not None:
+            return rebuilt
+
     return path.read_text()
+
+
+def _rerender(folder: Path, job_id: str, stamp: dict) -> str | None:
+    """Rebuild chart.html from the stored analysis. None if it can't be done."""
+    analysis_file = folder / "analysis.json"
+    if not analysis_file.exists():
+        return None
+    try:
+        from .pipeline import Analysis
+
+        analysis = Analysis.from_json(analysis_file.read_text())
+        name_file = folder / "name.txt"
+        name = stamp.get("name") or (
+            name_file.read_text().strip() if name_file.exists() else job_id
+        )
+        # The stored analysis was already transposed before being written, so
+        # re-applying the shift here would double it. Only the display metadata
+        # is reapplied.
+        html_text = render_html(
+            analysis,
+            title=name,
+            capo=stamp.get("capo", 0),
+            source_key=stamp.get("source_key"),
+            audio_src=f"/audio/{job_id}",
+            shift=stamp.get("shift", 0),
+            shapes=stamp.get("shapes"),
+            nav=True,
+        )
+    except Exception:  # noqa: BLE001 - a stale chart still beats a 500
+        traceback.print_exc()
+        return None
+
+    (folder / "chart.html").write_text(html_text)
+    (folder / "render.json").write_text(
+        json.dumps({**stamp, "version": RENDER_VERSION, "name": name})
+    )
+    return html_text
 
 
 @app.get("/audio/{job_id}")

@@ -110,6 +110,44 @@ class Analysis:
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Analysis":
+        """Rebuild an analysis from its stored JSON.
+
+        The inverse of `to_dict`, which is a plain `asdict` -- so this only has
+        to reattach the nested dataclasses that flattening turned into dicts.
+
+        Worth having because the app stores rendered HTML rather than rendering
+        on demand: without a reader, fixing the renderer can't reach a song
+        that's already been analyzed, and recovering it costs a full re-analysis
+        of audio whose answers are already on disk.
+        """
+        return cls(
+            path=data["path"],
+            duration=data["duration"],
+            tempo=data["tempo"],
+            meter=data.get("meter"),
+            key=data["key"],
+            key_confidence=data.get("key_confidence", 0.0),
+            beat_source=data.get("beat_source", ""),
+            chords=[ChordSpan(**c) for c in data.get("chords", [])],
+            beats=list(data.get("beats", [])),
+            downbeats=list(data.get("downbeats", [])),
+            measures=[Measure(**m) for m in data.get("measures", [])],
+            beat_options=[
+                BeatOptions(
+                    time=b["time"],
+                    # JSON has no tuples; the page expects (label, score) pairs.
+                    options=[tuple(o) for o in b.get("options", [])],
+                )
+                for b in data.get("beat_options", [])
+            ],
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "Analysis":
+        return cls.from_dict(json.loads(text))
+
 
 def analyze(
     path: str | Path,

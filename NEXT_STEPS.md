@@ -378,6 +378,15 @@ the CLI → Ledgr handoff proves annoying in practice.
 
 ## Maintenance / housekeeping
 
+- [ ] **A relative audio path crashes the cnnlstm model.** `chord-detect
+      testdata/song.wav` dies with `File not found:
+      ~/.cache/chord-detect/cnnlstm/testdata/song.wav` — the upstream code joins
+      the path against its own `WORKING_PATH`, and its "if absolute this has no
+      effect" comment is only true for absolute paths. An absolute path works
+      fine. Resolve the path to absolute in `cnnlstm.py` before handing it over.
+      Hits anyone using the CLI from the repo root, which is the obvious way to
+      use it.
+
 - [ ] No unit test suite yet (`scripts/eval.py` covers accuracy, not
       correctness). The `theory.py` round-trips (parse ↔ label ↔ transpose) are
       pure functions and trivially testable; start there.

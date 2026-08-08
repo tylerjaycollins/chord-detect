@@ -292,6 +292,34 @@ skipped the first Chorus was tested by dropping it: alignment got *worse*
 global pass was simply drifting. Neither Demucs nor a document edit was needed —
 only windowing.
 
+**`align.py` results (same song, measured through the real module):**
+
+| Configuration | Suspect lines | Longest line | Median score |
+|---|---|---|---|
+| Global, no anchors | 54/78 | 19.6s | 0.061 |
+| 2 user anchors | 37/78 | 11.7s | 0.180 |
+| Anchors + auto-refine | **30/78** | **8.3s** | **0.275** |
+
+At the last setting **0 lines are structurally implausible** — every remaining
+flag is `unsure` (low confidence), which this material produces regardless.
+
+**Window length is the dominant lever**, more than anchors as such: a 210s
+window drifts where a 70s one doesn't. Two user anchors help mostly by cutting
+the song into shorter pieces.
+
+- [ ] **Don't slice a global emission — re-run the model per window.** Tried
+      slicing as an optimization; it throws the entire benefit away, because
+      wav2vec2's self-attention spans its whole input, so 5 minutes of context
+      gives different representations than 70s of it. The gain comes from
+      bounding the model's *attention*, not the alignment search. Costs nothing
+      overall since windows partition the song, and is in fact faster.
+- [ ] Auto-refine alone (no user anchors) only reaches 46/78 — it can't rescue a
+      region where the first pass drifted badly, since it only trusts boundaries
+      in plausible neighbourhoods. Two anchors by ear remain worth ~15 lines.
+- [ ] Try shorter windows still (one per section, ~20s). The trend says better;
+      the risk is locking onto a bad first pass, which `derive_anchors` guards
+      against but hasn't been stress-tested.
+
 **Conclusions that change the plan:**
 
 - [ ] **The first fix is not Demucs, it's windowing.** A single 5-minute pass

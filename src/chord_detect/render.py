@@ -960,11 +960,13 @@ _NAV_JS = """
           [
             "Ledgr isn't connected yet.",
             "",
-            "1. In Ledgr, add an api-scoped token to LEDGR_API_TOKENS:",
-            "     overtone:api:<random hex>",
-            "   (an mcp-scoped token is refused)",
-            "2. Set LEDGR_API_OWNER_UPN on the Ledgr server.",
-            "3. Start Overtone with LEDGR_API_TOKEN=<that same random hex>",
+            "1. In the Ledgr repo:",
+            "     node scripts/make-token.mjs overtone api",
+            "2. Put the printed entry in LEDGR_API_TOKENS (Vercel + .env.local)",
+            "   and redeploy. The entry holds a HASH, not the token.",
+            "3. Set LEDGR_API_OWNER_UPN on the Ledgr server.",
+            "4. Start Overtone with the raw token it printed once:",
+            "     LEDGR_API_TOKEN=lgr_... uv run chord-detect-app",
             "",
             "Target: " + cfg.target + "   (override with LEDGR_URL)"
           ].join("\\n"));

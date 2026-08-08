@@ -486,7 +486,13 @@ takes `{ type: "song", title, body: { format: "chordpro", text } }` with an
 in-app editor uses, so the surface can't drift from Ledgr's contract.
 `scripts/seed-demo-content.mts` creates real song items with exactly this shape.
 
-- [ ] **Upload button / `--upload-ledgr` flag.** Two setup notes: the token must
+- [x] ~~**Upload button / `--upload-ledgr` flag.**~~ Done. Setup: run
+      `node scripts/make-token.mjs overtone api` in the Ledgr repo, put the
+      printed entry in `LEDGR_API_TOKENS`, and give Overtone the raw `lgr_`
+      token as `LEDGR_API_TOKEN`. **The env var holds a sha256 hash, not the
+      token** — they're different strings, which is easy to get wrong.
+      Payload uses the batch shape (`{items: [...]}`), the form Ledgr
+      documents and its own crons exercise. Old note: the token must
       be `api`-scoped (`verifyApiToken` requires it — an `mcp`-scoped token is
       rejected), and the target is `https://ledgr-sandy.vercel.app`, overridable
       via `LEDGR_URL` for testing against `localhost:3001`.

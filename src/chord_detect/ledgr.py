@@ -79,17 +79,28 @@ def upload_song(text: str, *, title: str, url: str | None = None,
     secret = api_token or token()
     if not secret:
         raise LedgrError(
-            "No Ledgr token. Set LEDGR_API_TOKEN to an api-scoped entry from "
-            "Ledgr's LEDGR_API_TOKENS (an mcp-scoped token won't work)."
+            "No Ledgr token. In the Ledgr repo run "
+            "`node scripts/make-token.mjs overtone api`, put the printed entry "
+            "in LEDGR_API_TOKENS, and set LEDGR_API_TOKEN to the raw lgr_ "
+            "token it shows once. Note the env var holds a hash, not the "
+            "token itself, so the two are different strings."
         )
     if not text.strip():
         raise LedgrError("Nothing to upload — the ChordPro source is empty.")
 
+    # The batch shape (`{items: [...]}`) rather than a bare item. The route
+    # accepts either, but this is the form Ledgr documents and the one its own
+    # cron callers exercise, and it reports per-item errors instead of failing
+    # the whole request opaquely.
     payload = json.dumps(
         {
-            "type": SONG_TYPE,
-            "title": title,
-            "body": {"format": CHORDPRO_FORMAT, "text": text},
+            "items": [
+                {
+                    "type": SONG_TYPE,
+                    "title": title,
+                    "body": {"format": CHORDPRO_FORMAT, "text": text},
+                }
+            ]
         }
     ).encode()
 

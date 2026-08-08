@@ -36,7 +36,20 @@ PORT={port}
 LOG="$HOME/Library/Logs/chord-detect.log"
 mkdir -p "$(dirname "$LOG")"
 
-open_ui() {{ open "http://127.0.0.1:$PORT/"; }}
+# Open in a standalone window rather than a browser tab. Chrome's --app drops
+# the address bar, tabs and bookmarks, so Overtone gets a window of its own that
+# cmd-tabs and sits in Mission Control like an app. Falls back to the default
+# browser when Chrome isn't installed -- a tab still works, it's just a tab.
+open_ui() {{
+  if [ -d "/Applications/Google Chrome.app" ]; then
+    open -na "Google Chrome" --args \
+      --app="http://127.0.0.1:$PORT/" \
+      --user-data-dir="$HOME/Library/Application Support/Overtone/window" \
+      >/dev/null 2>&1 || open "http://127.0.0.1:$PORT/"
+  else
+    open "http://127.0.0.1:$PORT/"
+  fi
+}}
 
 # Already running? Just show it.
 if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/"; then

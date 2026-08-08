@@ -1,0 +1,163 @@
+"""Push a finished chart into Ledgr as a song item.
+
+No new API was needed on the Ledgr side. `POST /api/machine/items` already
+takes a bare item object and routes it through the same `createItem` the in-app
+editor uses, so this surface can't drift from Ledgr's own contract:
+
+    { "type": "song",
+      "title": "...",
+      "body": { "format": "chordpro", "text": "..." } }
+
+Two things about the credential are easy to get wrong, so they're checked
+explicitly rather than surfacing as a bare 401:
+
+  * The token must be **api**-scoped. Ledgr's `verifyApiToken` only accepts
+    `api`; the `mcp`-scoped token used by the Claude connector is rejected.
+  * Ledgr acts on a single owner (`resolveMachineOwner`). If `LEDGR_API_OWNER_UPN`
+    isn't set on the server the request comes back 503, which says nothing about
+    the token at all.
+
+Stdlib `urllib` on purpose — one JSON POST doesn't justify a dependency.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+
+DEFAULT_URL = "https://ledgr-teal.vercel.app"
+SONG_TYPE = "song"
+CHORDPRO_FORMAT = "chordpro"
+TIMEOUT = 30
+
+
+class LedgrError(RuntimeError):
+    """Anything that stopped the upload, phrased for a human."""
+
+
+@dataclass(frozen=True)
+class Uploaded:
+    """Where the song landed, so the caller can offer to open it."""
+
+    item_id: str
+    title: str
+    url: str
+
+
+def base_url() -> str:
+    """Ledgr's origin. `LEDGR_URL` points this at a dev server for testing."""
+    return (os.environ.get("LEDGR_URL") or DEFAULT_URL).rstrip("/")
+
+
+def token() -> str | None:
+    return os.environ.get("LEDGR_API_TOKEN") or None
+
+
+def configured() -> bool:
+    """Whether an upload could even be attempted — gates the UI button."""
+    return token() is not None
+
+
+def upload_song(text: str, *, title: str, url: str | None = None,
+                api_token: str | None = None) -> Uploaded:
+    """Create a song item in Ledgr from ChordPro source.
+
+    Always creates; it never updates an existing song. Re-uploading the same
+    song therefore gives you a second item, which is the right default only
+    while the chart still flows one way. Revisit when corrections start coming
+    back from Ledgr.
+    """
+    origin = (url or base_url()).rstrip("/")
+    secret = api_token or token()
+    if not secret:
+        raise LedgrError(
+            "No Ledgr token. Set LEDGR_API_TOKEN to an api-scoped entry from "
+            "Ledgr's LEDGR_API_TOKENS (an mcp-scoped token won't work)."
+        )
+    if not text.strip():
+        raise LedgrError("Nothing to upload — the ChordPro source is empty.")
+
+    payload = json.dumps(
+        {
+            "type": SONG_TYPE,
+            "title": title,
+            "body": {"format": CHORDPRO_FORMAT, "text": text},
+        }
+    ).encode()
+
+    request = urllib.request.Request(
+        f"{origin}/api/machine/items",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as err:
+        raise LedgrError(_explain(err, origin)) from err
+    except urllib.error.URLError as err:
+        raise LedgrError(f"Couldn't reach Ledgr at {origin}: {err.reason}") from err
+
+    item = _first_item(body)
+    if item is None:
+        raise LedgrError(f"Ledgr accepted the request but returned no item: {body}")
+
+    item_id = str(item.get("id", ""))
+    return Uploaded(
+        item_id=item_id,
+        title=str(item.get("title") or title),
+        url=f"{origin}/items/{item_id}" if item_id else origin,
+    )
+
+
+def _first_item(body: object) -> dict | None:
+    """Unwrap the response.
+
+    A single create answers with the item; the batch shape answers with
+    `{ count, created: [...], errors: [...] }`. Accept either rather than
+    depending on which branch Ledgr took.
+    """
+    if not isinstance(body, dict):
+        return None
+    created = body.get("created")
+    if isinstance(created, list) and created and isinstance(created[0], dict):
+        return created[0]
+    if "id" in body:
+        return body
+    item = body.get("item")
+    return item if isinstance(item, dict) else None
+
+
+def _explain(err: urllib.error.HTTPError, origin: str) -> str:
+    """Turn Ledgr's terse status codes into something actionable.
+
+    401 and 503 are the two that will actually happen during setup, and neither
+    error body says what to do about it.
+    """
+    try:
+        detail = json.loads(err.read().decode() or "{}").get("error", "")
+    except Exception:
+        detail = ""
+
+    if err.code == 401:
+        return (
+            f"Ledgr rejected the token ({origin}). It must be an api-scoped "
+            "entry in LEDGR_API_TOKENS — an mcp-scoped token is refused by "
+            "verifyApiToken."
+        )
+    if err.code == 503:
+        return (
+            "Ledgr has no owner configured, so it can't file the song. Set "
+            "LEDGR_API_OWNER_UPN on the server. (The token was fine.)"
+        )
+    if err.code == 400:
+        return f"Ledgr rejected the song: {detail or 'bad request'}"
+    return f"Ledgr returned {err.code}{f': {detail}' if detail else ''}"

@@ -15,7 +15,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.table import Table
 
 from .chords import ChordRecognizerConfig
-from .chordpro import write_chordpro
+from . import ledgr
+from .chordpro import to_chordpro, write_chordpro
 from .features import chroma_features, load_audio
 from .pipeline import Analysis, analyze
 from .render import write_html
@@ -67,6 +68,12 @@ def main(
         None,
         "--chordpro",
         help="Write ChordPro (bar notation) for import into Ledgr.",
+    ),
+    upload_ledgr: bool = typer.Option(
+        False,
+        "--upload-ledgr",
+        help="Push the chart straight into Ledgr as a song. Needs an "
+        "api-scoped LEDGR_API_TOKEN; LEDGR_URL overrides the target.",
     ),
     chart: bool = typer.Option(
         True, "--chart/--no-chart", help="Print a measure-grouped chart."
@@ -203,11 +210,25 @@ def main(
         )
         console.print(f"[green]Wrote[/green] {chordpro_out}")
 
+    if upload_ledgr:
+        _upload_to_ledgr(analysis, capo)
+
     if suggest_at is not None:
         _print_suggestions(audio, analysis, suggest_at, shift)
 
     if progressions:
         _print_progressions(analysis)
+
+
+def _upload_to_ledgr(analysis: Analysis, capo: int) -> None:
+    """Send the chart to Ledgr, reporting the item URL or why it didn't go."""
+    source = to_chordpro(analysis, capo=capo, measures_per_section=16)
+    try:
+        result = ledgr.upload_song(source, title=Path(analysis.path).stem)
+    except ledgr.LedgrError as err:
+        console.print(f"[red]Ledgr upload failed[/red] — {err}")
+        raise typer.Exit(1) from err
+    console.print(f"[green]Uploaded to Ledgr[/green] {result.url}")
 
 
 def _print_summary(analysis: Analysis, shift: int) -> None:

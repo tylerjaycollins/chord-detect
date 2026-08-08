@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from . import ledgr
 from .chords import ChordRecognizerConfig
 from .chordpro import to_chordpro
 from .pipeline import analyze
@@ -34,7 +35,7 @@ from .theory import SIMPLE_QUALITY_NAMES, choose_shapes
 CACHE = Path.home() / ".cache" / "chord-detect" / "songs"
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".aiff", ".aif"}
 
-app = FastAPI(title="chord-detect")
+app = FastAPI(title="Overtone")
 
 
 @dataclass
@@ -266,6 +267,36 @@ def chordpro(job_id: str) -> FileResponse:
     return FileResponse(path, filename=f"{name}.cho", media_type="text/plain")
 
 
+@app.post("/ledgr/{job_id}")
+def to_ledgr(job_id: str) -> JSONResponse:
+    """Push a built chart into Ledgr as a song item.
+
+    Uploads the `.cho` already on disk rather than re-rendering, so what lands
+    in Ledgr is exactly what the "Download .cho" link would have given you.
+    """
+    path = CACHE / job_id / "song.cho"
+    if not path.exists():
+        raise HTTPException(404, "Not built yet")
+
+    name_file = CACHE / job_id / "name.txt"
+    title = name_file.read_text().strip() if name_file.exists() else job_id
+
+    try:
+        result = ledgr.upload_song(path.read_text(), title=title)
+    except ledgr.LedgrError as err:
+        # 502, not 500: the failure is Ledgr's answer (or its absence), not a
+        # bug here, and the message is already written for a human to act on.
+        return JSONResponse({"error": str(err)}, status_code=502)
+
+    return JSONResponse({"url": result.url, "title": result.title})
+
+
+@app.get("/ledgr")
+def ledgr_status() -> JSONResponse:
+    """Whether a token is configured, so the page can hide the button."""
+    return JSONResponse({"configured": ledgr.configured(), "target": ledgr.base_url()})
+
+
 @app.get("/library")
 def library() -> JSONResponse:
     """Previously analyzed songs, newest first."""
@@ -321,7 +352,7 @@ def forget(job_id: str) -> JSONResponse:
 _INDEX = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>chord-detect</title>
+<title>Overtone</title>
 <style>
   :root { --bg:#16202e; --panel:#1e2b3d; --line:#2b3a4f; --ink:#e8edf5;
           --dim:#8fa0b8; --gold:#e8c98a; --cell:#3a4657; }
@@ -387,7 +418,7 @@ _INDEX = """<!doctype html>
   .cho:hover { color:var(--gold); }
 </style></head>
 <body><div class="wrap">
-  <h1>chord-detect</h1>
+  <h1>Overtone</h1>
   <p class="sub">Pick a song. It works out the chords, beats, key and tempo, then
      you can play along and see where every chord falls.</p>
 
@@ -579,7 +610,7 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}"
     CACHE.mkdir(parents=True, exist_ok=True)
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    print(f"chord-detect running at {url}  (ctrl-c to stop)")
+    print(f"Overtone running at {url}  (ctrl-c to stop)")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

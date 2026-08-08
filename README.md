@@ -1,12 +1,15 @@
-# chord-detect
+# Overtone
 
 Detects chords, beats, downbeats, key, and tempo in an audio file. Runs entirely
 locally on Apple Silicon — no cloud, no API keys, no per-song cost.
 
+Overtone is the name of the app; the repo, the CLI, and the Python package are
+still `chord-detect`.
+
 ## The app
 
 ```bash
-uv run python scripts/make_app.py   # build "Chord Detect.app" in ~/Applications
+uv run python scripts/make_app.py   # build "Overtone.app" in ~/Applications
 uv run chord-detect-app             # or just run it from a terminal
 ```
 

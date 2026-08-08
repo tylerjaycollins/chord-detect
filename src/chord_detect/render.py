@@ -345,6 +345,7 @@ def _render_grid(rows: list[Row], analysis: Analysis, shift: int = 0) -> str:
 _NAV = """<nav class="nav">
   <a class="navlink" href="/">&#8592; New song</a>
   <select class="navsel" id="songswitch"><option value="">Recent songs…</option></select>
+  <button class="navlink right" id="toledgr" hidden>Upload to Ledgr</button>
   <a class="navlink right" id="chodl" href="#" download>Download .cho</a>
 </nav>"""
 
@@ -375,6 +376,35 @@ _NAV_JS = """
       if (h1) h1.textContent = mine.name;
       document.title = mine.name;
     }
+  }).catch(function () {});
+
+  // Upload to Ledgr. The button only appears when the server has a token, so
+  // the common no-token case is a hidden button rather than a failed click.
+  fetch('/ledgr').then(function (r) { return r.json(); }).then(function (cfg) {
+    var btn = document.getElementById('toledgr');
+    if (!btn || !cfg.configured) return;
+    var id = window.location.pathname.split('/').pop();
+    btn.hidden = false;
+    btn.title = 'Send this chart to ' + cfg.target;
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Uploading…';
+      fetch('/ledgr/' + id, { method: 'POST' })
+        .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.b.error || 'upload failed');
+          // Opened rather than navigated to: you're usually still playing along
+          // here, and losing the audio position to a page change is annoying.
+          btn.textContent = 'Opened in Ledgr';
+          window.open(res.b.url, '_blank');
+        })
+        .catch(function (err) {
+          btn.textContent = label;
+          window.alert('Ledgr upload failed — ' + err.message);
+        })
+        .finally(function () { btn.disabled = false; });
+    });
   }).catch(function () {});
 """
 

@@ -200,22 +200,57 @@ steady tempo.
       `pyrubberband`.
 - [ ] Nashville-number / Roman-numeral display, once key detection is trusted.
 
-## Lyrics in the measure view
+## Lyrics — automatic chord-over-word placement
 
-Show the words above the measures in the beat-grid view, so a single screen has
-lyrics, chords, and bar positions together — the thing you'd actually read while
-playing. This is the view Ledgr solves for print; the difference here is that it
-would be time-aligned to playback, with the playhead moving under the words.
+**Decided (2026-08-08).** Chords get matched to words *here*, automatically,
+and the ChordPro that goes to Ledgr arrives with placement already done. Ledgr
+stays the editor; what it stops being is the place where every chord is dragged
+onto a syllable from scratch.
 
-- [ ] Decide where lyrics come from. Typed in by hand is the honest starting
-      point and needs no new machinery. Automatic transcription (Whisper) would
-      be a much bigger lift and still needs manual timing correction.
-- [ ] Aligning words to *beats* is the hard part, not displaying them. A syllable
-      lands somewhere inside a measure, not neatly on a beat. Probably: attach a
-      lyric line to a measure, then let the user nudge word positions.
-- [ ] Ledgr already models chord-over-word placement (`ChordPair`), so its data
-      model is the obvious thing to borrow rather than inventing another.
-- [ ] Keep the chart view print-friendly if lyrics land in it.
+The reason this belongs here rather than in Ledgr: **we know when each chord
+sounds, to the millisecond, and Ledgr never will.** If we also know when each
+word is sung, placement is a join, not a manual task.
+
+The pipeline:
+
+1. Lyrics pasted in as plain text, one line per sung line. The only manual input.
+2. **Demucs** isolates the vocal stem. Already wanted for accuracy reasons (see
+   "Features to match Chord AI"); needed here because alignment against a full
+   band mix is measurably worse.
+3. **Forced alignment**, not transcription — `torchaudio.functional.forced_align`
+   with the known lyrics as the target, giving a start time per word. Because it
+   never has to guess *what* was sung, only *where*, it beats running Whisper at
+   the problem. Already installed: torchaudio 2.11 ships `forced_align` and the
+   `MMS_FA` pipeline, and torch is already a dependency. **No new dependency for
+   the alignment itself** — only Demucs is new.
+4. Join word times against chord span starts. Each chord attaches to the word
+   sounding when it begins.
+5. Emit ChordPro with inline brackets (`[G]word`) — Ledgr's `LyricLine` /
+   `ChordPair` shape exactly.
+
+- [ ] **Expect good-not-perfect, and design for it.** Forced aligners are
+      trained on speech. Sung, reverb-heavy, harmonized worship vocals are the
+      hard case — held syllables and melisma especially. Demucs closes much of
+      the gap, not all of it. The correction pass below is therefore load-bearing,
+      not polish.
+- [ ] **Correction pass with the audio playing** — click a chord, arrow keys
+      nudge it one word left or right. This is the one piece of chart editing
+      that earns its place here: *hearing* the chord land is how you know it's on
+      the right syllable, and Ledgr can't play the song. It is deliberately not
+      an editor — no chord picker, no transposition, no section editing. Those
+      exist in Ledgr and stay there.
+- [ ] A/B `MMS_FA` against the English-specific wav2vec2 pipeline on real
+      recordings; keep whichever wins. MMS_FA is multilingual and may lose to a
+      dedicated English model here.
+- [ ] Fallback for when alignment fails outright: tap a key on each line as the
+      song plays to stamp line-level timings (~2 min/song). Cruder, but it can't
+      fail, and it still beats placing every chord by hand.
+- [ ] **Check the MMS_FA license** before this goes anywhere beyond personal
+      use — it comes out of Meta's MMS project. Demucs is MIT and fine. Folds
+      into the licensing audit under Maintenance.
+- [ ] Show the words in the beat-grid view too, with the playhead moving under
+      them, so one screen has lyrics + chords + bar positions while playing.
+- [ ] Keep the chart view print-friendly once lyrics land in it.
 
 ## Songwriting / arranging tools
 
@@ -260,11 +295,24 @@ where a chord starts, `/` where it's held. Verified against Ledgr's real parser
 via `tsx` — meta, sections and all 91 bars parse correctly and round-trip
 through `serializeChordChart` unchanged.
 
-Workflow: analyze audio here → `--chordpro` → import to Ledgr → type the words
-in and drag chords onto the right syllables there.
+Workflow: analyze audio here → paste lyrics → automatic chord-over-word
+placement (see the lyrics section above) → correct while the song plays →
+upload to Ledgr → arrange, transpose, print there.
 
-- [ ] Wire up the actual import path in Ledgr (file upload, or paste). Right now
-      the handoff is a file you move yourself.
+**No new Ledgr API is needed — one already exists.** `POST /api/machine/items`
+takes `{ type: "song", title, body: { format: "chordpro", text } }` with an
+`Authorization: Bearer` token, and routes through the same `createItem` the
+in-app editor uses, so the surface can't drift from Ledgr's contract.
+`scripts/seed-demo-content.mts` creates real song items with exactly this shape.
+
+- [ ] **Upload button / `--upload-ledgr` flag.** Two setup notes: the token must
+      be `api`-scoped (`verifyApiToken` requires it — an `mcp`-scoped token is
+      rejected), and the target is `https://ledgr-teal.vercel.app`, overridable
+      via `LEDGR_URL` for testing against `localhost:3001`.
+- [ ] Decide what re-uploading the same song does. Creating a second item every
+      time is the wrong default once corrections start round-tripping; matching
+      on title and updating is probably right, but it needs a deliberate choice
+      rather than falling out of the implementation.
 - [ ] Section detection would make the handoff much better — the export
       currently emits `Chart 1`, `Chart 2` … in 16-measure blocks, which is
       arbitrary. Real verse/chorus labels would drop straight into Ledgr's
@@ -389,6 +437,15 @@ song → analyze with live progress → play along with the chart.
       run again — `ensure_model()` does this, but a manual `git pull` wouldn't.
 
 ## Done (recent)
+
+- **Backed up to a private GitHub repo** —
+  `github.com/tylerjaycollins/chord-detect`. The existing `.gitignore` already
+  kept audio and generated charts out, so nothing commercial went up with it.
+- **The beat grid ("Beats & measures") is now the default view.** It's the one
+  you actually read while the song plays; the lead-sheet chart is the thing you
+  switch to for printing. Falls back to opening on the chart when there are no
+  downbeats, since landing on an empty grid is worse than landing on the view
+  that still works. `RENDER_VERSION` bumped to 5 so cached charts re-render.
 
 - **Double-clickable macOS app** (`scripts/make_app.py` → `~/Applications/Chord
   Detect.app`). A thin launcher rather than a frozen bundle, so it runs this

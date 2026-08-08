@@ -1,6 +1,6 @@
 """Build a double-clickable macOS app that launches chord-detect.
 
-Produces `Chord Detect.app` — a real bundle with an icon, so it shows up in
+Produces `Overtone.app` — a real bundle with an icon, so it shows up in
 Spotlight, Launchpad and the Dock. The bundle is a thin launcher, not a frozen
 copy of the code: it runs `uv run chord-detect-app` from this repo, so edits to
 the project take effect without rebuilding.
@@ -24,8 +24,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-APP_NAME = "Chord Detect"
-BUNDLE_ID = "local.chorddetect.app"
+APP_NAME = "Overtone"
+BUNDLE_ID = "local.overtone.app"
 PORT = 8765
 
 LAUNCHER = """#!/bin/bash
@@ -45,7 +45,7 @@ if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/"; then
 fi
 
 cd "$REPO" || {{
-  osascript -e 'display alert "Chord Detect" message "Project folder not found at {repo}."'
+  osascript -e 'display alert "Overtone" message "Project folder not found at {repo}."'
   exit 1
 }}
 
@@ -53,7 +53,7 @@ cd "$REPO" || {{
 # a GUI launch does not inherit the shell's PATH.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 if ! command -v uv >/dev/null 2>&1; then
-  osascript -e 'display alert "Chord Detect" message "Could not find uv. Install it, or launch from a terminal instead."'
+  osascript -e 'display alert "Overtone" message "Could not find uv. Install it, or launch from a terminal instead."'
   exit 1
 fi
 
@@ -69,7 +69,7 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-osascript -e 'display alert "Chord Detect" message "The server did not start. See ~/Library/Logs/chord-detect.log."'
+osascript -e 'display alert "Overtone" message "The server did not start. See ~/Library/Logs/chord-detect.log."'
 exit 1
 """
 
@@ -240,7 +240,7 @@ def main() -> int:
         subprocess.run([lsregister, "-f", str(bundle)], capture_output=True)
 
     print(f"Built {bundle}")
-    print("  Double-click it, or find it in Spotlight as “Chord Detect”.")
+    print("  Double-click it, or find it in Spotlight as “Overtone”.")
     print("  Logs: ~/Library/Logs/chord-detect.log")
     return 0
 

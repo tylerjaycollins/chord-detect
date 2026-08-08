@@ -275,19 +275,47 @@ when working a song up with others.
       chromagram alongside the analysis JSON so repeated queries are instant;
       this matters a lot for an interactive UI.
 
-## Ledgr is the editor — don't build another one
+## The editor — reversed: Overtone gets one, by reusing Ledgr's
 
-**Decision: this project does not get a chart editor.** Ledgr
-(`~/Development/Ledgr`) already has one, and it does the thing that matters —
-lyrics typed in with chords positioned over the right words. Rebuilding that
-here would be weeks of work to arrive somewhere worse.
+**Superseded (2026-08-08).** This section used to say "this project does not get
+a chart editor," on the grounds that rebuilding Ledgr's would be weeks of work
+to arrive somewhere worse. That reasoning assumed a *rebuild*. It doesn't apply,
+because Ledgr's chart logic is deliberately dependency-free and can simply be
+reused:
 
-Division of labour:
+| Ledgr source | Lines | Reusable |
+|---|---|---|
+| `lib/chordpro/*.ts` — parse, render, transpose, lyrics import, export | 970 | **As-is.** Only relative imports, zero npm packages |
+| `chord-editor/chordpro-edit.ts` — every editing operation | 172 | **As-is.** Pure, React-free |
+| `ChordEditor` / `ChordPicker` / `TransposeControl` `.tsx` | 532 | No — React; rewritten as vanilla JS |
 
-- **chord-detect** — the part that needs audio: chords, beats, downbeats, key,
-  tempo, meter. Exports ChordPro.
-- **Ledgr** — lyrics, chord placement over syllables, transposition, sections,
-  printing, sharing.
+`chordpro/types.ts` states the property outright: import-pure, so the same
+parser runs in the client editor, the server print path, and a plain-node
+script. Overtone becomes a fourth consumer of that same code, which means a
+chart cannot mean one thing here and another in Ledgr. Roughly two-thirds of the
+editor arrives by bundling; the rest is UI we'd write anyway to fit the existing
+playback page.
+
+**Why an editor here at all**, given Ledgr has a better one: because Overtone
+can *play the song*. Hearing a chord land is how you know it's on the right
+syllable, and Ledgr has no audio. Placement correction is the one editing task
+that genuinely belongs next to playback.
+
+**Scope discipline still applies.** Overtone edits *placement*. Arranging,
+printing, sharing, and set-building stay in Ledgr. If a feature doesn't need to
+hear the recording, it doesn't belong here.
+
+- [ ] Vendoring script: rebuild the bundle from Ledgr's source with the esbuild
+      already in its `node_modules`, and record the source commit alongside it.
+      The coupling is real — without a recorded commit, drift is silent.
+- [ ] Decide what happens when Ledgr's parser changes under us. A checked-in
+      hash plus a "your bundle is N commits behind" warning is probably enough.
+
+Division of labour, restated:
+
+- **Overtone** — everything that needs the audio: chords, beats, downbeats, key,
+  tempo, meter, and chord-over-word placement corrected against playback.
+- **Ledgr** — arrangement, transposition for the band, printing, sharing, sets.
 
 The bridge is `--chordpro`, which emits Ledgr's `BarsLine` format
 (`| C / / / | F / C / |`): one bar per measure, one token per beat, chord name

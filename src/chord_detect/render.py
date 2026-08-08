@@ -565,6 +565,28 @@ _NAV_JS = """
 
     function key(l, w) { return l + ':' + w; }
 
+    // Redraw one slot rather than the whole view. Rebuilding everything on each
+    // placement threw the page back to the top of the song, which loses your
+    // place exactly when you're working through it in order.
+    function paintSlot(slot) {
+      var here = placed[slot.dataset.k];
+      var old = slot.querySelector('.pchord');
+      if (old) old.remove();
+      slot.classList.toggle('has', !!here);
+      if (!here) return;
+      var c = document.createElement('span');
+      c.className = 'pchord';
+      // Re-spelled on every paint, so changing capo moves placed chords too.
+      c.textContent = here.r == null ? here.chord : spell(here.r, here.q);
+      slot.insertBefore(c, slot.firstChild);
+    }
+
+    function repaint(k) {
+      var slot = wrap.querySelector('[data-k="' + k + '"]');
+      if (slot) paintSlot(slot);
+      status();
+    }
+
     function appendIntro(token) {
       var base = intro.replace(/\\s+$/, '');
       return base ? base + ' ' + token : token;
@@ -679,6 +701,10 @@ _NAV_JS = """
     }
 
     function draw() {
+      // A full rebuild still happens on load and when the capo moves. Hold the
+      // scroll position across it, or changing shapes mid-song throws you back
+      // to the first line.
+      var keepY = window.scrollY;
       wrap.innerHTML = '';
 
       // Every song gets an intro whether or not the lyrics mention one, since
@@ -727,20 +753,12 @@ _NAV_JS = """
         function slotFor(wi, word, edge) {
           var slot = document.createElement('span');
           slot.className = 'pword' + (edge ? ' edge' : '');
-          var here = placed[key(li, wi)];
-          if (here) {
-            var c = document.createElement('span');
-            c.className = 'pchord';
-            // Re-spell for the shapes currently selected, so changing capo
-            // moves every placed chord with it.
-            c.textContent = here.r == null ? here.chord : spell(here.r, here.q);
-            slot.appendChild(c);
-            slot.classList.add('has');
-          }
+          slot.dataset.k = key(li, wi);
           var t = document.createElement('span');
           t.className = 'ptext';
           t.textContent = edge ? '\\u00b7' : word;
           slot.appendChild(t);
+          paintSlot(slot);
           slot.addEventListener('click', function (ev) {
             if (ev.shiftKey || ev.altKey) { clear(li, wi); return; }
             put(li, wi);
@@ -756,6 +774,7 @@ _NAV_JS = """
         wrap.appendChild(row);
       });
       status();
+      if (keepY) window.scrollTo(0, keepY);
     }
 
     // Store pitch, not just a name. A chord written down as "C" in G shapes
@@ -784,14 +803,14 @@ _NAV_JS = """
       }
       history.push(key(li, wi));
       dirty = true;
-      draw();
+      repaint(key(li, wi));
     }
 
     function clear(li, wi) {
       if (placed[key(li, wi)]) {
         delete placed[key(li, wi)];
         dirty = true;
-        draw();
+        repaint(key(li, wi));
       }
     }
 
@@ -817,11 +836,15 @@ _NAV_JS = """
           intro = bits.join(' ');
         }
         dirty = true;
-        draw();
+        // Only the intro field changed; rebuilding the view would scroll away
+        // from wherever you were working.
+        var field = wrap.querySelector('.introin');
+        if (field) field.value = intro;
+        status();
       }
       if (act === 'undo') {
         var last = history.pop();
-        if (last) { delete placed[last]; dirty = true; draw(); }
+        if (last) { delete placed[last]; dirty = true; repaint(last); }
       }
     });
 
@@ -919,7 +942,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 12
+RENDER_VERSION = 13
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

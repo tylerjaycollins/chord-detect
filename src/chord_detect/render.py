@@ -559,19 +559,49 @@ _NAV_JS = """
     var intro = '';          // bar notation, e.g. "Em / / G | Em / / G"
     var queue = [];          // pinned: the detected chord run
     var at = 0;              // pinned: position in that run
-    var pick = null;         // manual: chord awaiting a word
+    var pick = null;         // chord armed, awaiting a word
+    var history = [];        // placement order, so Undo can step back
     var dirty = false;
 
     function key(l, w) { return l + ':' + w; }
 
-    function chordList() {
-      var seen = [], out = [];
+    // Spell a pitch class without re-applying the capo. `spell()` subtracts it,
+    // which is right for a detected chord but wrong for one derived from the
+    // key we're already playing in.
+    function nameOf(pc, quality) {
+      var names = useFlats() ? FLAT : SHARP;
+      return names[((pc % 12) + 12) % 12] + (quality || '');
+    }
+
+    // Everything the song might want, in the shapes currently selected.
+    // Detected chords alone isn't enough: a chord that's plainly in the key but
+    // never got detected still has to be one click away.
+    function vocabulary() {
+      var seen = {}, out = [];
+      function add(label) {
+        if (label && !seen[label]) { seen[label] = 1; out.push(label); }
+      }
       (TIMELINE || []).forEach(function (row) {
-        if (row.c && row.c !== 'N' && seen.indexOf(row.c) < 0) {
-          seen.push(row.c); out.push(row.c);
-        }
+        if (row.c && row.c !== 'N') add(spell(row.r, row.q));
       });
+      var k = parseChord(shapeKey());
+      if (k) {
+        var steps = [0, 2, 4, 5, 7, 9, 11];
+        var quals = k.q === 'm' ? ['m', 'dim', '', 'm', 'm', '', '']
+                                : ['', 'm', 'm', '', '', 'm', 'dim'];
+        for (var i = 0; i < 7; i++) add(nameOf(k.root + steps[i], quals[i]));
+      }
       return out;
+    }
+
+    // The chord sounding at a moment -- what "Place" uses, so playing along and
+    // hitting Place puts down whatever you're hearing.
+    function chordAt(now) {
+      var found = null;
+      (TIMELINE || []).forEach(function (row) {
+        if (row.t <= now + 0.02 && row.c && row.c !== 'N') found = row;
+      });
+      return found;
     }
 
     function buildQueue() {
@@ -596,30 +626,38 @@ _NAV_JS = """
 
     function status() {
       var count = Object.keys(placed).length;
+      var tail = '<span class="pcount">' + count + ' placed' +
+                 (dirty ? ' &middot; <b>unsaved</b>' : '') + '</span>' +
+                 '<button class="small" data-act="save">Save</button>';
+
       if (mode === 'pinned') {
-        var now = queue[at];
+        var live = chordAt(audio.currentTime || 0);
         bar.innerHTML =
-          '<span class="pnext">' +
-          (now ? 'Place <b>' + now.c + '</b> &middot; ' + fmt(now.t) : 'All placed') +
-          '</span>' +
-          '<button class="small" data-act="hear">Hear it</button>' +
-          '<button class="small" data-act="skip">Skip</button>' +
-          '<button class="small" data-act="undo">Undo</button>' +
-          '<span class="pcount">' + at + ' / ' + queue.length +
-          ' &middot; ' + count + ' placed' + (dirty ? ' &middot; unsaved' : '') + '</span>' +
-          '<button class="small" data-act="save">Save</button>';
+          '<span class="pnext">Sounding now: <b>' +
+          (live ? spell(live.r, live.q) : '—') + '</b></span>' +
+          '<button class="small go" data-act="place">Place it</button>' +
+          '<span class="phelp">then click the word &mdash; or click a word to ' +
+          'place what&rsquo;s sounding there</span>' +
+          '<button class="small" data-act="undo">Undo last</button>' + tail;
       } else {
         bar.innerHTML =
           '<span class="pnext">' +
-          (pick ? 'Click a word for <b>' + pick + '</b>' : 'Pick a chord') +
+          (pick ? 'Now click a word for <b>' + pick + '</b>'
+                : 'Pick a chord, then click a word') +
           '</span>' +
-          '<span class="ppal">' + chordList().map(function (c) {
+          '<span class="ppal">' + vocabulary().map(function (c) {
             return '<button class="chip' + (c === pick ? ' on' : '') +
                    '" data-chord="' + c + '">' + c + '</button>';
-          }).join('') + '</span>' +
-          '<span class="pcount">' + count + ' placed' +
-          (dirty ? ' &middot; unsaved' : '') + '</span>' +
-          '<button class="small" data-act="save">Save</button>';
+          }).join('') +
+          '<input class="chordin" id="' + mode + 'typed" placeholder="or type…" ' +
+          'value="" size="7" spellcheck="false">' +
+          '</span>' + tail;
+        var typed = document.getElementById(mode + 'typed');
+        if (typed) {
+          typed.addEventListener('change', function () {
+            if (typed.value.trim()) { pick = typed.value.trim(); status(); }
+          });
+        }
       }
     }
 
@@ -665,9 +703,13 @@ _NAV_JS = """
         }
         var row = document.createElement('div');
         row.className = 'pline';
-        line.words.forEach(function (word, wi) {
+
+        // A chord can land before the first word or after the last -- a lead-in
+        // or a turnaround. Without a slot for those they'd have to be shoved
+        // onto a word they don't belong to.
+        function slotFor(wi, word, edge) {
           var slot = document.createElement('span');
-          slot.className = 'pword';
+          slot.className = 'pword' + (edge ? ' edge' : '');
           var here = placed[key(li, wi)];
           if (here) {
             var c = document.createElement('span');
@@ -678,14 +720,20 @@ _NAV_JS = """
           }
           var t = document.createElement('span');
           t.className = 'ptext';
-          t.textContent = word;
+          t.textContent = edge ? '\\u00b7' : word;
           slot.appendChild(t);
           slot.addEventListener('click', function (ev) {
             if (ev.shiftKey || ev.altKey) { clear(li, wi); return; }
             put(li, wi);
           });
-          row.appendChild(slot);
+          return slot;
+        }
+
+        row.appendChild(slotFor(-1, '', true));
+        line.words.forEach(function (word, wi) {
+          row.appendChild(slotFor(wi, word, false));
         });
+        row.appendChild(slotFor(line.words.length, '', true));
         wrap.appendChild(row);
       });
       status();
@@ -693,14 +741,18 @@ _NAV_JS = """
 
     function put(li, wi) {
       if (mode === 'pinned') {
-        var now = queue[at];
-        if (!now) return;
-        placed[key(li, wi)] = { chord: now.c, t: now.t };
-        at += 1;
+        // Whatever was armed by "Place it", else whatever is sounding now, so
+        // playing along and clicking words is enough on its own.
+        var row = pick ? null : chordAt(audio.currentTime || 0);
+        var label = pick || (row ? spell(row.r, row.q) : null);
+        if (!label) return;
+        placed[key(li, wi)] = { chord: label, t: row ? row.t : null };
+        pick = null;
       } else {
         if (!pick) return;
         placed[key(li, wi)] = { chord: pick, t: null };
       }
+      history.push(key(li, wi));
       dirty = true;
       draw();
     }
@@ -720,12 +772,19 @@ _NAV_JS = """
       if (!btn) return;
       var act = btn.dataset.act;
       if (act === 'save') save();
-      if (act === 'skip') { at = Math.min(queue.length, at + 1); status(); }
-      if (act === 'undo') { at = Math.max(0, at - 1); status(); }
-      if (act === 'hear') {
-        var now = queue[at];
-        if (now) { audio.currentTime = Math.max(0, now.t - 1); audio.play(); update(); }
+      if (act === 'place') {
+        var row = chordAt(audio.currentTime || 0);
+        if (row) { pick = spell(row.r, row.q); status(); }
       }
+      if (act === 'undo') {
+        var last = history.pop();
+        if (last) { delete placed[last]; dirty = true; draw(); }
+      }
+    });
+
+    // Keep "Sounding now" honest while the song plays.
+    audio.addEventListener('timeupdate', function () {
+      if (mode === 'pinned' && !document.getElementById('pinned').hidden) status();
     });
 
     function load() {
@@ -809,7 +868,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 10
+RENDER_VERSION = 11
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -908,10 +967,16 @@ _TEMPLATE = """<!doctype html>
     letter-spacing: .05em; margin-left: auto; }}
 
   /* Chord placement */
-  .placebar {{ position: sticky; top: 0; z-index: 4; display: flex; gap: 10px;
-    align-items: center; flex-wrap: wrap; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
-    margin-bottom: 16px; }}
+  /* Pinned to the bottom of the window rather than sticky in the flow: the
+     transport is already sticky at the top, and two competing sticky bars
+     fight over the same space. This way the palette is always reachable no
+     matter how far down the lyrics you've scrolled. */
+  .placebar {{ position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: var(--panel); border-top: 1px solid var(--line);
+    padding: 10px 16px; max-height: 42vh; overflow-y: auto;
+    box-shadow: 0 -6px 18px rgba(0,0,0,.35); }}
+  .placewords {{ padding-bottom: 190px; }}
   .pnext {{ font-size: .9rem; color: var(--ink); }}
   .pnext b {{ color: var(--gold); }}
   .pcount {{ margin-left: auto; color: var(--dim); font-size: .76rem; }}
@@ -921,13 +986,25 @@ _TEMPLATE = """<!doctype html>
     cursor: pointer; }}
   .chip.on {{ background: var(--gold); color: #16202e; border-color: var(--gold); }}
   .pline {{ display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 12px; }}
-  .pword {{ position: relative; padding: 18px 3px 3px; border-radius: 5px;
+  .pword {{ position: relative; padding: 20px 4px 4px; border-radius: 5px;
     cursor: pointer; line-height: 1.35; }}
-  .pword:hover {{ background: var(--cell); }}
+  .pword:hover {{ background: var(--cell); outline: 1px solid var(--line); }}
   .pword.has {{ background: rgba(232,201,138,.10); }}
-  .pchord {{ position: absolute; top: 1px; left: 3px; color: var(--gold);
-    font-size: .76rem; font-weight: 700; white-space: nowrap; }}
+  /* Centred over the word, as printed charts set them -- a chord at the left
+     edge reads as belonging to the gap before the word. */
+  .pchord {{ position: absolute; top: 1px; left: 50%; transform: translateX(-50%);
+    color: var(--gold); font-size: .78rem; font-weight: 700; white-space: nowrap; }}
   .ptext {{ font-size: .98rem; }}
+  /* Lead-in and turnaround slots at each end of a line. */
+  .pword.edge {{ opacity: .35; min-width: 16px; text-align: center; }}
+  .pword.edge:hover {{ opacity: 1; }}
+  .pword.edge.has {{ opacity: 1; }}
+  .phelp {{ color: var(--dim); font-size: .74rem; }}
+  .chordin {{ background: var(--cell); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 8px; font-size: .82rem; }}
+  .small.go {{ background: var(--gold); color: #16202e; border-color: var(--gold);
+    font-weight: 700; }}
+  @media print {{ .placebar {{ display: none; }} .placewords {{ padding-bottom: 0; }} }}
   .introbox {{ margin-bottom: 18px; }}
   .introin {{ width: 100%; background: var(--cell); color: var(--ink);
     border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px;

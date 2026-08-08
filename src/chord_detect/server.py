@@ -468,14 +468,24 @@ def _placed_chordpro(folder: Path, title: str) -> str | None:
             section_label = label
             out.append("")
             out.append(f"{{section: {label}}}")
-        chords = by_line.get(index, {})
+        chords = dict(by_line.get(index, {}))
         words = text.split()
-        out.append(
-            " ".join(
-                (f"[{chords[i]}]{w}" if i in chords else w)
-                for i, w in enumerate(words)
-            )
+        # Index -1 is a lead-in before the first word and len(words) a
+        # turnaround after the last. ChordPro carries both as a bracket with no
+        # word attached, which is how a chart shows a change between phrases.
+        lead = chords.pop(-1, None)
+        tail = chords.pop(len(words), None)
+        body = " ".join(
+            (f"[{chords[i]}]{w}" if i in chords else w)
+            for i, w in enumerate(words)
         )
+        # A space after the lead-in bracket keeps it a chord *before* the first
+        # word rather than one sitting on it -- "[D]word" and "[D] word" are
+        # different placements to a reader and to Ledgr's parser.
+        line = f"[{lead}] {body}" if lead else body
+        if tail:
+            line = f"{line} [{tail}]"
+        out.append(line)
     return "\n".join(out) + "\n"
 
 

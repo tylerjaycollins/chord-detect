@@ -22,7 +22,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from . import ledgr
@@ -170,6 +170,7 @@ async def start(
     free_time: bool = Form(False),
     shapes: str = Form(""),
     model: str = Form("cnnlstm"),
+    lyrics: str = Form(""),
 ) -> JSONResponse:
     name = Path(file.filename or "song").stem
     suffix = Path(file.filename or "").suffix.lower()
@@ -182,6 +183,9 @@ async def start(
     if not payload:
         raise HTTPException(400, "That file was empty.")
 
+    # Lyrics are deliberately absent from `options`, and so from the cache key.
+    # They're an artifact of the song, not an input to chord detection: putting
+    # them here would make a typo fix in verse 2 re-run the whole pipeline.
     options = {
         "capo": capo,
         "transpose": transpose,
@@ -200,6 +204,11 @@ async def start(
         out_dir.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(payload)
     (out_dir / "name.txt").write_text(name)
+
+    # Written before the cached-chart shortcut below, so pasting lyrics for a
+    # song analyzed earlier still lands them rather than being skipped over.
+    if lyrics.strip():
+        (out_dir / "lyrics.txt").write_text(lyrics)
 
     # Already analyzed with these exact settings -- skip straight to the chart.
     if (out_dir / "chart.html").exists():
@@ -265,6 +274,43 @@ def chordpro(job_id: str) -> FileResponse:
         CACHE / job_id / "name.txt"
     ).exists() else "song"
     return FileResponse(path, filename=f"{name}.cho", media_type="text/plain")
+
+
+@app.get("/lyrics/{job_id}")
+def get_lyrics(job_id: str) -> JSONResponse:
+    """The song's lyrics, or empty if none have been added yet."""
+    path = CACHE / job_id / "lyrics.txt"
+    return JSONResponse(
+        {"lyrics": path.read_text() if path.exists() else "", "id": job_id}
+    )
+
+
+@app.put("/lyrics/{job_id}")
+async def put_lyrics(job_id: str, request: Request) -> JSONResponse:
+    """Save lyrics for a song.
+
+    Stored beside the analysis rather than folded into it. Chords depend on
+    audio and options; alignment depends on audio and lyrics. Keeping them
+    separate means fixing a typo in verse 2 doesn't re-run chord detection --
+    which it would if lyrics were part of `_cache_key`.
+    """
+    folder = CACHE / job_id
+    if not folder.exists():
+        raise HTTPException(404, "No such song")
+
+    payload = await request.json()
+    lyrics = payload.get("lyrics")
+    if not isinstance(lyrics, str):
+        raise HTTPException(400, "Expected a 'lyrics' string.")
+
+    path = folder / "lyrics.txt"
+    if lyrics.strip():
+        path.write_text(lyrics)
+    elif path.exists():
+        # Clearing is a legitimate edit, not an error.
+        path.unlink()
+
+    return JSONResponse({"saved": True, "chars": len(lyrics)})
 
 
 @app.post("/ledgr/{job_id}")
@@ -379,6 +425,11 @@ _INDEX = """<!doctype html>
     color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
   label.f input, label.f select { background:var(--cell); color:var(--ink);
     border:1px solid var(--line); border-radius:7px; padding:7px 9px; font-size:.9rem; }
+  .hint { color:var(--dim); font-weight:400; text-transform:none; opacity:.75; }
+  .note { color:var(--dim); font-size:.8rem; line-height:1.5; margin:12px 0 10px; }
+  #lyrics { width:100%; background:var(--cell); color:var(--ink); resize:vertical;
+    border:1px solid var(--line); border-radius:7px; padding:9px 11px;
+    font-size:.88rem; line-height:1.5; font-family:inherit; }
   #working[hidden], #picker[hidden] { display:none; }
   #working { text-align:center; padding:48px 24px; background:var(--panel);
     border:1px solid var(--line); border-radius:14px; }
@@ -460,6 +511,16 @@ _INDEX = """<!doctype html>
     </div>
   </details>
 
+  <details>
+    <summary>Lyrics <span class="hint">optional</span></summary>
+    <p class="note">Paste the words if you have them, one line per sung line.
+       Section headings like &ldquo;Verse 1&rdquo; or &ldquo;Chorus&rdquo; on their own
+       line are recognised. You can add or change these later from the chart &mdash;
+       lyrics are stored separately, so editing them never re-runs chord detection.</p>
+    <textarea id="lyrics" rows="8" spellcheck="false"
+      placeholder="Verse 1&#10;...&#10;&#10;Chorus&#10;..."></textarea>
+  </details>
+
   <h2>Recent</h2>
   <div id="library"></div>
   </div>
@@ -525,6 +586,7 @@ _INDEX = """<!doctype html>
     body.append('vocabulary', document.getElementById('vocabulary').value);
     body.append('shapes', document.getElementById('shapes').value);
     body.append('model', document.getElementById('model').value);
+    body.append('lyrics', document.getElementById('lyrics').value || '');
     try { localStorage.setItem('shapes', document.getElementById('shapes').value); } catch (e) {}
     fetch('/analyze', { method:'POST', body: body })
       .then(function (r) { return r.json().then(function (j) {

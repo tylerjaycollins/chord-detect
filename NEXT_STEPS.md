@@ -213,6 +213,27 @@ word is sung, placement is a join, not a manual task.
 
 The pipeline:
 
+**Lyrics are a separate artifact, not an analysis input (decided 2026-08-08).**
+Chords depend on *audio + options*; alignment depends on *audio + lyrics*.
+Different inputs, different lifetimes, so they get different caches. Folding
+lyrics into `_cache_key()` would mean fixing one typo in verse 2 re-runs the
+whole chord pipeline — 25s now, minutes once Demucs lands.
+
+- Lyrics live in `lyrics.txt` beside `analysis.json`, keyed by audio hash alone.
+- Alignment is its own job keyed on `(audio hash, lyrics hash)`. Editing lyrics
+  re-runs alignment only; re-analyzing with a different capo or model leaves
+  lyrics and alignment untouched.
+- An optional paste box at upload saves a trip when you already have the words;
+  the same path is reachable from the chart page afterwards. The intended
+  workflow is chords first, lyrics once you're happy with them.
+- **The chart never blocks on lyrics.** Analysis finishes and shows chords
+  regardless; words appear when alignment is done. A lyrics failure must not
+  cost you the chords.
+- **Cache Demucs stems by audio hash alone.** Alignment wants the vocal stem and
+  the chord-accuracy idea wants the instrumental one — whichever runs first
+  should pay for separation once. Putting stems behind either job's cache key
+  separates the same song twice.
+
 1. Lyrics pasted in as plain text, one line per sung line. The only manual input.
 2. **Demucs** isolates the vocal stem. Already wanted for accuracy reasons (see
    "Features to match Chord AI"); needed here because alignment against a full

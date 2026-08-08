@@ -215,6 +215,9 @@ def render_html(
         grid=_render_grid(rows, analysis, shift),
         nav=_NAV if nav else "",
         navjs=_NAV_JS if nav else "",
+        # Only on server-served charts: editing lyrics needs somewhere to save
+        # them, and a CLI export has no server behind it.
+        chordprojs=_chordpro_bundle() if nav else "",
         shapeopts="".join(
             f'<option value="{s}"{" selected" if s == shapes else ""}>{s} shapes</option>'
             for s in SHAPE_KEYS
@@ -410,7 +413,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 5
+RENDER_VERSION = 6
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -925,9 +928,25 @@ _TEMPLATE = """<!doctype html>
 {navjs}
 }})();
 </script>
+{chordprojs}
 </body>
 </html>
 """
+
+
+def _chordpro_bundle() -> str:
+    """Ledgr's ChordPro parser/editor, inlined so the page stays self-contained.
+
+    Missing is not fatal: the chart and playback don't need it, only the lyrics
+    editor does. A page without it simply won't offer editing, which beats
+    refusing to render a chart because a vendored file wasn't built.
+    """
+    path = Path(__file__).parent / "static" / "chordpro.js"
+    if not path.exists():
+        return ""
+    # An argument to .format(), never itself a format string -- the bundle is
+    # full of braces and doubling them would corrupt the JavaScript.
+    return f"<script>\n{path.read_text()}\n</script>"
 
 
 def write_html(analysis: Analysis, path: Path, **kwargs) -> Path:

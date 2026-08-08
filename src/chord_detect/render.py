@@ -513,7 +513,7 @@ _NAV_JS = """
                 '<div><textarea id="lyricsbox" rows="8" placeholder="Verse 1&#10;…"></textarea>' +
                 '<button class="small" id="savelyrics">Save lyrics</button></div>');
           } else {
-            say('Lyrics saved (' + d.lyrics.split('\n').filter(Boolean).length +
+            say('Lyrics saved (' + d.lyrics.split('\\n').filter(Boolean).length +
                 ' lines) but not aligned yet. ' +
                 '<button class="small" id="realign">Align to the recording</button>' +
                 '<div><textarea id="lyricsbox" rows="8"></textarea>' +
@@ -569,7 +569,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 7
+RENDER_VERSION = 8
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

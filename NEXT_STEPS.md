@@ -531,6 +531,22 @@ the CLI → Ledgr handoff proves annoying in practice.
 
 ## Maintenance / housekeeping
 
+- [ ] **Run `scripts/check_js.py` before committing changes to `render.py`.**
+      The injected JavaScript lives inside Python strings, so Python interprets
+      it first, and neither failure mode is visible to a Python linter or to
+      importing the module: `_TEMPLATE` goes through `.format()` (a bare `{` is
+      a format field) and `_NAV_JS` is a non-raw string (a `\n` inside a JS
+      string literal becomes a real newline). Both have now shipped once. Both
+      break the *entire* page rather than one feature, because a syntax error
+      kills the whole `<script>` block — so playback, the view tabs and the nav
+      links die together and none of it points at the change that caused it.
+      Worth a pre-commit hook.
+- [ ] Cached `chart.html` is rendered at analysis time and served as-is, so a
+      renderer fix doesn't reach songs already analyzed — `RENDER_VERSION` only
+      forces a re-render via a re-upload, which costs a full re-analysis. A
+      proper `Analysis.from_json` plus re-rendering on demand would fix charts
+      in place; `analysis.json` already stores everything needed.
+
 - [ ] **A relative audio path crashes the cnnlstm model.** `chord-detect
       testdata/song.wav` dies with `File not found:
       ~/.cache/chord-detect/cnnlstm/testdata/song.wav` — the upstream code joins

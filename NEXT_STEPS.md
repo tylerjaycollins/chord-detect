@@ -320,6 +320,42 @@ the song into shorter pieces.
       the risk is locking onto a bad first pass, which `derive_anchors` guards
       against but hasn't been stress-tested.
 
+### Placement scored against a published chart (2026-08-08)
+
+`Jesus, Strong and Kind` — SongSelect chart in C, recording in C, so no capo
+mismatch to confound it. Ground truth taken from the chart's column layout: a
+chord's column above a lyric line names the word it belongs to. 86 chord
+placements across six sung sections.
+
+| | Result |
+|---|---|
+| Chord lands on the **exact** word | **51/86 (59%)** |
+| Chord lands **within one word** | **77/86 (90%)** |
+
+**This is the first measurement of the actual deliverable** — everything before
+it judged alignment on whether line durations looked plausible, not on whether
+chords land where a chart puts them.
+
+Alignment on this song was far healthier than on `He Who Knew No Sin`: 15 lines,
+5 suspect, median score 0.212, **with no anchors at all**. It's 249s against
+315s, with a much shorter lyric sheet and a far more exposed vocal — so song
+difficulty varies a lot, and the He Who Knew numbers are the pessimistic end.
+
+**What 90%-within-one-word means for the UI:** the correction interaction is
+nudge-one-word-left/right, and that single gesture covers nine placements in
+ten. It confirms the design rather than merely being encouraging.
+
+- [ ] Caveats on that 59%, all of which could move it either way:
+      the ±1 metric is generous; the chord→word join is crude (first word whose
+      span contains or follows the chord start); detected chords only agree with
+      this chart's chords 88% of the time, so some "misplacements" are chord
+      detection differences rather than alignment errors; and the chart's
+      column→word mapping is nearest-column, which is approximate on tight
+      layouts.
+- [ ] Score `Jesus, Firm Foundation` too — it has the capo/key complication
+      (recording sounds a whole step above its chart), which is a different
+      stress and would show whether transposition disturbs placement.
+
 **Conclusions that change the plan:**
 
 - [ ] **The first fix is not Demucs, it's windowing.** A single 5-minute pass

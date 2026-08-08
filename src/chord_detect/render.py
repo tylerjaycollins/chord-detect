@@ -637,8 +637,8 @@ _NAV_JS = """
       });
     }
 
-    function save() {
-      var rows = Object.keys(placed).map(function (k) {
+    function rows() {
+      return Object.keys(placed).map(function (k) {
         var parts = k.split(':');
         var here = placed[k];
         return {
@@ -648,9 +648,12 @@ _NAV_JS = """
           t: here.t
         };
       });
+    }
+
+    function save() {
       return fetch('/placement/' + songId + '/' + mode, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ placements: rows, intro: intro })
+        body: JSON.stringify({ placements: rows(), intro: intro })
       }).then(function () { dirty = false; status(); });
     }
 
@@ -677,7 +680,8 @@ _NAV_JS = """
           '<button class="small" data-act="i-bar">+ |</button>' +
           '<button class="small" data-act="i-del">&larr;</button>' +
           '</span>' +
-          '<button class="small" data-act="undo">Undo last</button>' + tail;
+          '<button class="small" data-act="undo">Undo last</button>' +
+          '<button class="small" data-act="tomanual">Send to Manual</button>' + tail;
       } else {
         bar.innerHTML =
           '<span class="pnext">' +
@@ -846,6 +850,29 @@ _NAV_JS = """
         var last = history.pop();
         if (last) { delete placed[last]; dirty = true; repaint(last); }
       }
+      // Hand the pinned work over to Manual for tidying up. Sends what's on
+      // screen rather than the saved file, so unsaved placements go too --
+      // otherwise "send" would quietly drop the last few you made.
+      if (act === 'tomanual') {
+        var mine = rows();
+        fetch('/placement/' + songId + '/manual')
+          .then(function (r) { return r.json(); })
+          .then(function (existing) {
+            var had = (existing.placements || []).length;
+            if (had && !window.confirm(
+                  'Manual already has ' + had + ' placed chord(s). Replace them '
+                  + 'with these ' + mine.length + '?')) return null;
+            return fetch('/placement/' + songId + '/manual', {
+              method: 'PUT', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ placements: mine, intro: intro })
+            });
+          })
+          .then(function (done) {
+            if (!done) return;
+            if (window.__reloadPlacer) window.__reloadPlacer('manual');
+            bar.querySelector('[data-act="tomanual"]').textContent = 'Sent ✓';
+          });
+      }
     });
 
     // Keep "Sounding now" honest while the song plays.
@@ -903,6 +930,12 @@ _NAV_JS = """
       if (PLACERS[mode]) PLACERS[mode].redraw();
     });
   };
+
+  // Re-read one view from the server -- used after Pinned hands its work over,
+  // so Manual shows the copied chords instead of whatever it had loaded.
+  window.__reloadPlacer = function (mode) {
+    if (PLACERS[mode]) PLACERS[mode].load();
+  };
   Object.keys(PLACERS).forEach(function (mode) {
     var tab = document.querySelector('.tabs button[data-view="' + mode + '"]');
     if (tab && PLACERS[mode]) {
@@ -942,7 +975,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 13
+RENDER_VERSION = 14
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

@@ -28,7 +28,12 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-DEFAULT_URL = "https://ledgr-teal.vercel.app"
+# Note there are two live Ledgr hosts. `ledgr-teal` is what runbook.md
+# references and is the one with OAuth discovery configured; `ledgr-sandy` is
+# the current target. If an upload ever lands somewhere unexpected, check this
+# first -- both hosts answer, so a wrong value fails by filing the song in the
+# wrong instance rather than by erroring.
+DEFAULT_URL = "https://ledgr-sandy.vercel.app"
 SONG_TYPE = "song"
 CHORDPRO_FORMAT = "chordpro"
 TIMEOUT = 30

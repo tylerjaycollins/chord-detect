@@ -488,7 +488,7 @@ in-app editor uses, so the surface can't drift from Ledgr's contract.
 
 - [ ] **Upload button / `--upload-ledgr` flag.** Two setup notes: the token must
       be `api`-scoped (`verifyApiToken` requires it — an `mcp`-scoped token is
-      rejected), and the target is `https://ledgr-teal.vercel.app`, overridable
+      rejected), and the target is `https://ledgr-sandy.vercel.app`, overridable
       via `LEDGR_URL` for testing against `localhost:3001`.
 - [ ] Decide what re-uploading the same song does. Creating a second item every
       time is the wrong default once corrections start round-tripping; matching

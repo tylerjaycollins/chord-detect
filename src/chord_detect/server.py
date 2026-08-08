@@ -21,6 +21,7 @@ import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -313,6 +314,169 @@ async def put_lyrics(job_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"saved": True, "chars": len(lyrics)})
 
 
+ALIGN_JOBS: dict[str, dict] = {}
+
+
+class _StoredAnalysis:
+    """Enough of an Analysis to render ChordPro, rebuilt from analysis.json.
+
+    The pipeline writes its analysis but has no reader, and the alternative --
+    re-analyzing the audio just to export -- would cost 25s to produce a file we
+    already have the ingredients for.
+    """
+
+    def __init__(self, data: dict, path: str) -> None:
+        self.path = data.get("path") or path
+        self.duration = data.get("duration", 0.0)
+        self.tempo = data.get("tempo", 0.0)
+        self.meter = data.get("meter")
+        self.key = data.get("key", "C")
+        self.chords = [
+            SimpleNamespace(
+                label=c["label"], start=c["start"], end=c["end"],
+                confidence=c.get("confidence", 0.0),
+            )
+            for c in data.get("chords", [])
+        ]
+
+
+def _aligned_chordpro(folder: Path, title: str) -> str | None:
+    """ChordPro with chords over words, or None if that isn't possible yet."""
+    analysis_file = folder / "analysis.json"
+    alignment_file = folder / "alignment.json"
+    if not (analysis_file.exists() and alignment_file.exists()):
+        return None
+
+    from .align import Alignment, Line, Word, lyrics_hash
+    from .chordpro import to_chordpro_with_lyrics
+
+    data = json.loads(alignment_file.read_text())
+    lyrics_file = folder / "lyrics.txt"
+    if lyrics_file.exists():
+        # Lyrics edited since aligning: the timings describe different words, so
+        # exporting them would place chords using stale positions.
+        if lyrics_hash(lyrics_file.read_text()) != data.get("lyrics_hash"):
+            return None
+
+    lines = [
+        Line(
+            label=row["label"],
+            section=row["section"],
+            text=row["text"],
+            words=[
+                Word(text=w["w"], start=w["t"], end=w["e"], score=w["s"])
+                for w in row["words"]
+            ],
+        )
+        for row in data.get("lines", [])
+    ]
+    if not lines:
+        return None
+
+    alignment = Alignment(
+        lines=lines,
+        stars=[tuple(s) for s in data.get("stars", [])],
+        lyrics_hash=data.get("lyrics_hash", ""),
+        duration=data.get("duration", 0.0),
+    )
+    analysis = _StoredAnalysis(json.loads(analysis_file.read_text()), title)
+    return to_chordpro_with_lyrics(analysis, alignment, title=title)
+
+
+def _audio_file(folder: Path) -> Path | None:
+    for suffix in AUDIO_SUFFIXES:
+        candidate = folder / f"audio{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _run_align(job_id: str, folder: Path, lyrics: str, anchors: list) -> None:
+    state = ALIGN_JOBS[job_id]
+    try:
+        from .align import align
+
+        audio_path = _audio_file(folder)
+        if audio_path is None:
+            raise FileNotFoundError("the song's audio is no longer cached")
+
+        def report(stage: str, fraction: float) -> None:
+            state["stage"], state["fraction"] = stage, fraction
+
+        result = align(audio_path, lyrics, anchors=anchors, progress=report)
+        (folder / "alignment.json").write_text(result.to_json())
+        state["suspect"] = len(result.suspect)
+        state["lines"] = len(result.lines)
+        state["stage"] = "Done"
+        state["fraction"] = 1.0
+    except Exception as exc:  # noqa: BLE001 - surface it to the UI
+        state["error"] = f"{type(exc).__name__}: {exc}"
+        traceback.print_exc()
+    finally:
+        state["done"] = True
+
+
+@app.post("/align/{job_id}")
+async def start_align(job_id: str, request: Request) -> JSONResponse:
+    """Align the stored lyrics to the audio.
+
+    Its own job with its own artifact, never folded into chord analysis --
+    re-aligning after fixing a typo must not re-run chord detection.
+    """
+    folder = CACHE / job_id
+    lyrics_file = folder / "lyrics.txt"
+    if not lyrics_file.exists():
+        raise HTTPException(400, "Add lyrics before aligning.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    anchors = [
+        (int(a[0]), float(a[1]))
+        for a in payload.get("anchors", [])
+        if isinstance(a, (list, tuple)) and len(a) == 2
+    ]
+
+    ALIGN_JOBS[job_id] = {
+        "stage": "Queued", "fraction": 0.0, "done": False, "error": None,
+    }
+    threading.Thread(
+        target=_run_align,
+        args=(job_id, folder, lyrics_file.read_text(), anchors),
+        daemon=True,
+    ).start()
+    return JSONResponse({"started": True})
+
+
+@app.get("/align/{job_id}")
+def get_align(job_id: str) -> JSONResponse:
+    """Progress while running, then the alignment itself.
+
+    Reports `stale` when the lyrics changed after the alignment was written, so
+    the page can offer a re-run rather than showing timings for older words.
+    """
+    folder = CACHE / job_id
+    job = ALIGN_JOBS.get(job_id)
+    if job and not job["done"]:
+        return JSONResponse({"running": True, **job})
+
+    path = folder / "alignment.json"
+    if not path.exists():
+        return JSONResponse({"running": False, "aligned": False,
+                             "error": (job or {}).get("error")})
+
+    data = json.loads(path.read_text())
+    lyrics_file = folder / "lyrics.txt"
+    stale = False
+    if lyrics_file.exists():
+        from .align import lyrics_hash
+
+        stale = lyrics_hash(lyrics_file.read_text()) != data.get("lyrics_hash")
+    return JSONResponse({"running": False, "aligned": True, "stale": stale,
+                         "error": (job or {}).get("error"), **data})
+
+
 @app.post("/ledgr/{job_id}")
 def to_ledgr(job_id: str) -> JSONResponse:
     """Push a built chart into Ledgr as a song item.
@@ -327,8 +491,16 @@ def to_ledgr(job_id: str) -> JSONResponse:
     name_file = CACHE / job_id / "name.txt"
     title = name_file.read_text().strip() if name_file.exists() else job_id
 
+    # Prefer chords positioned over words. That's the whole point of alignment,
+    # and it's what saves the work in Ledgr; bar notation is the fallback when
+    # a song has no lyrics or hasn't been aligned.
+    source = path.read_text()
+    aligned = _aligned_chordpro(CACHE / job_id, title)
+    if aligned:
+        source = aligned
+
     try:
-        result = ledgr.upload_song(path.read_text(), title=title)
+        result = ledgr.upload_song(source, title=title)
     except ledgr.LedgrError as err:
         # 502, not 500: the failure is Ledgr's answer (or its absence), not a
         # bug here, and the message is already written for a human to act on.

@@ -119,6 +119,87 @@ def _bars(analysis: Analysis) -> list[tuple[list[str], str]]:
     return bars
 
 
+def to_chordpro_with_lyrics(
+    analysis: Analysis,
+    alignment,
+    *,
+    title: str | None = None,
+    capo: int = 0,
+) -> str:
+    """Render chords positioned over words, as `[G]word` inline brackets.
+
+    The payoff of alignment: chord start times are known to the millisecond and
+    word times come from `align.py`, so placement is a join rather than a manual
+    task. The output is Ledgr's `LyricLine`/`ChordPair` shape, so it lands in its
+    editor with the placement already done.
+
+    Chords sounding between sung lines -- intros, turnarounds -- are emitted as
+    a comment rather than silently dropped, since they're real and a player
+    needs them, but they belong to no word.
+    """
+    out: list[str] = []
+    name = title or Path(analysis.path).stem
+    out.append(f"{{title: {name}}}")
+    out.append(f"{{key: {analysis.key}}}")
+    if capo:
+        out.append(f"{{capo: {capo}}}")
+    out.append(f"{{tempo: {analysis.tempo:.0f}}}")
+    if analysis.meter:
+        out.append(f"{{time: {analysis.meter}/4}}")
+
+    spans = [s for s in analysis.chords if s.label != "N"]
+    used = set()
+    section = None
+
+    for line in alignment.lines:
+        if not line.words:
+            continue
+        if line.label != section:
+            section = line.label
+            out.append("")
+            out.append(f"{{section: {section}}}")
+
+        # Chords that start anywhere inside this line, placed on the word that
+        # was sounding when the change happened.
+        placed: dict[int, str] = {}
+        for si, span in enumerate(spans):
+            if span.start < line.start - 0.25 or span.start > line.end:
+                continue
+            used.add(si)
+            index = 0
+            for wi, word in enumerate(line.words):
+                if word.start <= span.start <= word.end:
+                    index = wi
+                    break
+                if word.start > span.start:
+                    index = wi
+                    break
+                index = wi
+            # First chord in, don't overwrite a change already on that word.
+            placed.setdefault(index, span.label)
+
+        written = line.text.split()
+        parts: list[str] = []
+        for wi, word in enumerate(written):
+            if wi in placed:
+                parts.append(f"[{placed[wi]}]{word}")
+            else:
+                parts.append(word)
+        out.append(" ".join(parts))
+
+    leftover = [s for i, s in enumerate(spans) if i not in used]
+    if leftover:
+        out.append("")
+        out.append("{section: Instrumental}")
+        out.append(
+            "{c: chords with no words under them — "
+            + f"{len(leftover)} changes, see the beat grid"
+            + "}"
+        )
+
+    return "\n".join(out) + "\n"
+
+
 def write_chordpro(analysis: Analysis, path: Path, **kwargs) -> Path:
     path.write_text(to_chordpro(analysis, **kwargs))
     return path

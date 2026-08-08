@@ -231,6 +231,13 @@ def render_html(
         grid_sel="true" if rows else "false",
         chart_hidden=" hidden" if rows else "",
         grid_hidden="" if rows else " hidden",
+        # Server-served only: the panel needs somewhere to fetch alignment from.
+        lyricstab=(
+            '<button role="tab" aria-selected="false" data-view="lyrics">'
+            "Lyrics</button>"
+            if nav
+            else ""
+        ),
         grid_note=(
             ""
             if rows
@@ -381,6 +388,155 @@ _NAV_JS = """
     }
   }).catch(function () {});
 
+  // ---- Lyrics panel ------------------------------------------------------
+  // Words appear under the playhead as the song plays. Lines the aligner is
+  // unsure about are marked rather than hidden: knowing which few to check is
+  // the difference between correcting a chart and re-doing one.
+  (function () {
+    var songId = window.location.pathname.split('/').pop();
+    var panel = document.getElementById('lyriclines');
+    var status = document.getElementById('lyricstate');
+    var tab = document.querySelector('.tabs button[data-view="lyrics"]');
+    if (!panel || !tab) return;
+    var LINES = [], anchors = [], current = -1;
+
+    function say(html) { status.innerHTML = html; }
+
+    function draw() {
+      panel.innerHTML = '';
+      var section = null;
+      LINES.forEach(function (line, i) {
+        if (line.label !== section) {
+          section = line.label;
+          var h = document.createElement('div');
+          h.className = 'lsection';
+          h.textContent = section;
+          panel.appendChild(h);
+        }
+        var el = document.createElement('div');
+        el.className = 'lline' + (line.flags && line.flags.length ? ' suspect' : '');
+        el.dataset.index = i;
+        var t = document.createElement('span');
+        t.className = 'ltime';
+        t.textContent = fmt(line.start);
+        el.appendChild(t);
+        var words = document.createElement('span');
+        words.textContent = line.text;
+        el.appendChild(words);
+        if (line.flags && line.flags.length) {
+          var f = document.createElement('span');
+          f.className = 'lflag';
+          f.textContent = line.flags.join(' ');
+          el.appendChild(f);
+        }
+        // Click to jump; shift-click to anchor this line to the current time,
+        // which is the rescue when a stretch has drifted.
+        el.addEventListener('click', function (ev) {
+          if (ev.shiftKey) {
+            anchors = anchors.filter(function (a) { return a[0] !== i; });
+            anchors.push([i, audio.currentTime || 0]);
+            say('Anchor set on line ' + i + ' at ' + fmt(audio.currentTime || 0) +
+                '. <button class="small" id="realign">Re-align with ' +
+                anchors.length + ' anchor(s)</button>');
+            document.getElementById('realign').addEventListener('click', runAlign);
+          } else {
+            audio.currentTime = line.start;
+            update();
+          }
+        });
+        panel.appendChild(el);
+      });
+    }
+
+    function fmt(t) {
+      var m = Math.floor(t / 60), s = Math.floor(t % 60);
+      return m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    function follow(now) {
+      if (!LINES.length) return;
+      var at = -1;
+      for (var i = 0; i < LINES.length; i++) {
+        if (LINES[i].start <= now) at = i; else break;
+      }
+      if (at === current) return;
+      current = at;
+      var all = panel.querySelectorAll('.lline');
+      all.forEach(function (el) { el.classList.remove('now'); });
+      if (at >= 0 && all[at]) {
+        all[at].classList.add('now');
+        if (!document.getElementById('lyrics').hidden) {
+          all[at].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }
+    }
+    window.__lyricFollow = follow;
+
+    function runAlign() {
+      say('Aligning… this takes about as long as the song is minutes.');
+      fetch('/align/' + songId, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ anchors: anchors })
+      }).then(poll);
+    }
+
+    function poll() {
+      fetch('/align/' + songId).then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.running) {
+            say('Aligning… ' + (d.stage || '') +
+                ' ' + Math.round((d.fraction || 0) * 100) + '%');
+            return setTimeout(poll, 1000);
+          }
+          if (d.error) return say('Alignment failed — ' + d.error);
+          if (!d.aligned) return offer();
+          LINES = d.lines || [];
+          anchors = d.anchors || [];
+          var bad = LINES.filter(function (l) { return l.flags && l.flags.length; }).length;
+          say((d.stale ? '<b>Lyrics changed since this was aligned.</b> ' : '') +
+              LINES.length + ' lines aligned' +
+              (bad ? ', ' + bad + ' worth checking (marked)' : '') +
+              '. Click a line to jump; shift-click to anchor it to the current time. ' +
+              '<button class="small" id="realign">Re-align</button>');
+          document.getElementById('realign').addEventListener('click', runAlign);
+          draw();
+        }).catch(function () { say('Could not load alignment.'); });
+    }
+
+    function offer() {
+      fetch('/lyrics/' + songId).then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.lyrics) {
+            say('No lyrics yet for this song. Add them from the home page when ' +
+                'you upload, or paste them below.' +
+                '<div><textarea id="lyricsbox" rows="8" placeholder="Verse 1&#10;…"></textarea>' +
+                '<button class="small" id="savelyrics">Save lyrics</button></div>');
+          } else {
+            say('Lyrics saved (' + d.lyrics.split('\n').filter(Boolean).length +
+                ' lines) but not aligned yet. ' +
+                '<button class="small" id="realign">Align to the recording</button>' +
+                '<div><textarea id="lyricsbox" rows="8"></textarea>' +
+                '<button class="small" id="savelyrics">Update lyrics</button></div>');
+            document.getElementById('lyricsbox').value = d.lyrics;
+            document.getElementById('realign').addEventListener('click', runAlign);
+          }
+          document.getElementById('savelyrics').addEventListener('click', function () {
+            fetch('/lyrics/' + songId, {
+              method: 'PUT',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ lyrics: document.getElementById('lyricsbox').value })
+            }).then(function () { poll(); });
+          });
+        });
+    }
+
+    tab.addEventListener('click', function () {
+      if (!LINES.length) poll();
+    });
+    poll();
+  })();
+
   // Upload to Ledgr. The button only appears when the server has a token, so
   // the common no-token case is a hidden button rather than a failed click.
   fetch('/ledgr').then(function (r) { return r.json(); }).then(function (cfg) {
@@ -413,7 +569,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 6
+RENDER_VERSION = 7
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -491,6 +647,25 @@ _TEMPLATE = """<!doctype html>
   .navlink.right {{ margin-left: auto; }}
   .navsel {{ background: var(--panel); color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font-size: .85rem; max-width: 280px; }}
+
+  /* Lyrics view */
+  #lyricstate {{ color: var(--dim); font-size: .84rem; line-height: 1.6;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 14px; }}
+  #lyricstate textarea {{ width: 100%; margin-top: 10px; background: var(--cell);
+    color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
+    padding: 9px 11px; font: inherit; font-size: .86rem; }}
+  .lsection {{ color: var(--gold); font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .07em; margin: 18px 0 6px; }}
+  .lline {{ display: flex; gap: 12px; align-items: baseline; padding: 6px 10px;
+    border-radius: 7px; cursor: pointer; border-left: 3px solid transparent; }}
+  .lline:hover {{ background: var(--panel); }}
+  .lline.now {{ background: var(--cell); border-left-color: var(--gold); }}
+  .lline.suspect {{ border-left-color: #b5793f; }}
+  .ltime {{ color: var(--dim); font-size: .72rem; min-width: 38px;
+    font-variant-numeric: tabular-nums; }}
+  .lflag {{ color: #b5793f; font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .05em; margin-left: auto; }}
 
   /* Transport */
   .transport {{
@@ -607,11 +782,17 @@ _TEMPLATE = """<!doctype html>
 <div class="tabs" role="tablist">
   <button role="tab" aria-selected="{chart_sel}" data-view="chart">Chart</button>
   <button role="tab" aria-selected="{grid_sel}" data-view="grid">Beats &amp; measures</button>
+  {lyricstab}
 </div>
 
 <section class="view" id="chart"{chart_hidden}>
   {chart}
   <p class="legend">Four measures per line. Each measure lists the chords played in it.</p>
+</section>
+
+<section class="view" id="lyrics" hidden>
+  <div id="lyricstate"></div>
+  <div id="lyriclines"></div>
 </section>
 
 <section class="view" id="grid"{grid_hidden}>
@@ -795,6 +976,7 @@ _TEMPLATE = """<!doctype html>
     curEl.textContent = fmt(t);
 
     refreshNow(t);
+    if (window.__lyricFollow) window.__lyricFollow(t);
 
     var index = findIndex(extents, t);
     var row = index >= 0 ? extents[index] : null;

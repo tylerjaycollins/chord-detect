@@ -499,7 +499,7 @@ def _placed_chordpro(folder: Path, title: str) -> str | None:
         lead = chords.pop(-1, None)
         tail = chords.pop(len(words), None)
         body = " ".join(
-            (f"[{chords[i]}]{w}" if i in chords else w)
+            (_chord_in_word(w, chords[i]) if i in chords else w)
             for i, w in enumerate(words)
         )
         # A space after the lead-in bracket keeps it a chord *before* the first
@@ -725,6 +725,30 @@ async def put_placement(job_id: str, mode: str, request: Request) -> JSONRespons
         )
     )
     return JSONResponse({"saved": True, "count": len(cleaned)})
+
+
+def _chord_in_word(word: str, chord: str) -> str:
+    """Put the chord bracket in the middle of the word, not in front of it.
+
+    ChordPro's `[C]word` means "the change happens here", and a renderer draws
+    the symbol at exactly that point -- so a bracket at the front reads as
+    belonging to the gap before the word. Printed charts centre the symbol over
+    the syllable, and the only way to say that in ChordPro is to split the word:
+    `wo[C]rd`.
+
+    This does corrupt the word as text, which is why it isn't the default
+    elsewhere: search, transposition of lyrics, and any later lyric editing all
+    see two fragments. It's fine here because the lyrics are kept separately and
+    this file exists to be read and played from.
+
+    Trailing punctuation is excluded from the midpoint, so a comma doesn't drag
+    the symbol right of where the syllable actually sits.
+    """
+    core = word.rstrip(".,;:!?\"')]}—–-")
+    if len(core) < 2:
+        return f"[{chord}]{word}"
+    middle = len(core) // 2
+    return f"{word[:middle]}[{chord}]{word[middle:]}"
 
 
 def _bars_line(text: str) -> str:

@@ -573,13 +573,16 @@ being a separate mode: change the chord, then place it.
       (`ledgr.json` per song) are the shape another backend could slot into.
       Worth keeping that framing if this is ever used by anyone else.
 
-- [ ] **Chords render at the start of the word in Ledgr, not centred over it.**
-      This is not something the export can fix: ChordPro's `[C]word` means "the
-      change happens at this point in the text", and where the symbol is *drawn*
-      is the renderer's decision. Overtone's placement views centre them; Ledgr
-      left-aligns. Getting the middle-of-the-word look means changing Ledgr's
-      chart renderer, not the ChordPro. The alternative -- writing `wo[C]rd` to
-      fake it -- would corrupt the word and break transposition, so don't.
+- [x] ~~Chords render at the start of the word in Ledgr, not centred.~~ Fixed
+      by splitting the word: the pushed ChordPro writes `wo[C]rd`, so the
+      renderer draws the symbol over the middle of the syllable. Punctuation is
+      excluded from the midpoint and one-letter words keep a front bracket.
+      This *does* corrupt the word as text -- search and lyric editing see two
+      fragments -- which is acceptable only because the lyrics are kept in a
+      separate file and this export exists to be read and played from. Don't
+      reuse `_chord_in_word` anywhere the text has to stay intact.
+      Transposition is unaffected: it operates on the bracket contents, verified
+      with `Em7 -> F#m7` and `D/F# -> E/G#` after the split.
 
 ## Maintenance / housekeeping
 

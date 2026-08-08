@@ -768,14 +768,39 @@ def to_ledgr(job_id: str) -> JSONResponse:
             source = candidate
             break
 
+    # Remember which Ledgr item this song became, so pushing again rewrites the
+    # chart instead of leaving a trail of near-identical songs to tidy up.
+    link_file = CACHE / job_id / "ledgr.json"
+    known = None
+    if link_file.exists():
+        try:
+            known = json.loads(link_file.read_text()).get("item_id")
+        except ValueError:
+            known = None
+
     try:
-        result = ledgr.upload_song(source, title=title)
+        if known:
+            try:
+                result = ledgr.update_song(known, source, title=title)
+            except ledgr.LedgrError:
+                # The item was deleted in Ledgr, or belongs to another instance.
+                # Falling back to create beats refusing to push at all.
+                result = ledgr.upload_song(source, title=title)
+        else:
+            result = ledgr.upload_song(source, title=title)
     except ledgr.LedgrError as err:
         # 502, not 500: the failure is Ledgr's answer (or its absence), not a
         # bug here, and the message is already written for a human to act on.
         return JSONResponse({"error": str(err)}, status_code=502)
 
-    return JSONResponse({"url": result.url, "title": result.title})
+    link_file.write_text(
+        json.dumps({"item_id": result.item_id, "url": result.url,
+                    "target": ledgr.base_url()})
+    )
+    return JSONResponse(
+        {"url": result.url, "title": result.title,
+         "updated": bool(known) and result.item_id == known}
+    )
 
 
 @app.get("/ledgr")

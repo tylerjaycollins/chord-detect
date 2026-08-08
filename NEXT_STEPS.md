@@ -559,6 +559,28 @@ being a separate mode: change the chord, then place it.
       windowing findings are worth something and it may return as a pre-fill
       once chord editing lands — but nothing should depend on it.
 
+## Settings, and where placement rendering belongs
+
+- [ ] **A settings panel.** Token and target URL live in
+      `~/.config/overtone/config.json` (0600), read after `LEDGR_API_TOKEN` /
+      `LEDGR_URL` so an env var still wins. A file rather than env alone
+      because the macOS bundle is launched by Finder and inherits none of the
+      shell's environment -- an export in a profile works from a terminal and
+      silently doesn't from the Dock icon. Needs a UI to set it rather than
+      hand-editing JSON.
+- [ ] **"Push to Cloud" is deliberately generic.** It happens to speak Ledgr's
+      API today, but the button, the config key and the stored link
+      (`ledgr.json` per song) are the shape another backend could slot into.
+      Worth keeping that framing if this is ever used by anyone else.
+
+- [ ] **Chords render at the start of the word in Ledgr, not centred over it.**
+      This is not something the export can fix: ChordPro's `[C]word` means "the
+      change happens at this point in the text", and where the symbol is *drawn*
+      is the renderer's decision. Overtone's placement views centre them; Ledgr
+      left-aligns. Getting the middle-of-the-word look means changing Ledgr's
+      chart renderer, not the ChordPro. The alternative -- writing `wo[C]rd` to
+      fake it -- would corrupt the word and break transposition, so don't.
+
 ## Maintenance / housekeeping
 
 - [ ] **Run `scripts/check_js.py` before committing changes to `render.py`.**

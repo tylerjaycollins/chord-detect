@@ -27,6 +27,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 # Note there are two live Ledgr hosts. `ledgr-teal` is what runbook.md
 # references and is the one with OAuth discovery configured; `ledgr-sandy` is
@@ -52,13 +53,44 @@ class Uploaded:
     url: str
 
 
+CONFIG = Path.home() / ".config" / "overtone" / "config.json"
+
+
+def _config() -> dict:
+    """Settings from disk.
+
+    A file rather than only an environment variable, because the macOS bundle
+    is launched by Finder and inherits none of the shell's environment -- so an
+    export in a shell profile works from a terminal and silently doesn't from
+    the Dock icon.
+    """
+    try:
+        return json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(**values: str) -> Path:
+    """Merge settings into the config file, creating it if needed."""
+    current = _config()
+    current.update({k: v for k, v in values.items() if v is not None})
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(current, indent=2) + "\n")
+    # The token is a credential; don't leave it world-readable.
+    CONFIG.chmod(0o600)
+    return CONFIG
+
+
 def base_url() -> str:
     """Ledgr's origin. `LEDGR_URL` points this at a dev server for testing."""
-    return (os.environ.get("LEDGR_URL") or DEFAULT_URL).rstrip("/")
+    return (
+        os.environ.get("LEDGR_URL") or _config().get("url") or DEFAULT_URL
+    ).rstrip("/")
 
 
 def token() -> str | None:
-    return os.environ.get("LEDGR_API_TOKEN") or None
+    """The API token: environment first, then the config file."""
+    return os.environ.get("LEDGR_API_TOKEN") or _config().get("token") or None
 
 
 def configured() -> bool:
@@ -131,6 +163,65 @@ def upload_song(text: str, *, title: str, url: str | None = None,
         item_id=item_id,
         title=str(item.get("title") or title),
         url=f"{origin}/items/{item_id}" if item_id else origin,
+    )
+
+
+def update_song(item_id: str, text: str, *, title: str, url: str | None = None,
+                api_token: str | None = None) -> Uploaded:
+    """Rewrite an existing Ledgr song in place.
+
+    The counterpart to `upload_song`, so pushing a corrected chart replaces the
+    chart rather than leaving a trail of near-identical songs to tidy up. Uses
+    the same batch envelope as create; PATCH routes through the same
+    `updateItem` the in-app editor uses.
+    """
+    origin = (url or base_url()).rstrip("/")
+    secret = api_token or token()
+    if not secret:
+        raise LedgrError("No Ledgr token configured.")
+
+    payload = json.dumps(
+        {
+            "items": [
+                {
+                    "id": item_id,
+                    "title": title,
+                    "body": {"format": CHORDPRO_FORMAT, "text": text},
+                }
+            ]
+        }
+    ).encode()
+
+    request = urllib.request.Request(
+        f"{origin}/api/machine/items",
+        data=payload,
+        method="PATCH",
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            body = json.loads(response.read().decode() or "{}")
+    except urllib.error.HTTPError as err:
+        raise LedgrError(_explain(err, origin)) from err
+    except urllib.error.URLError as err:
+        raise LedgrError(f"Couldn't reach Ledgr at {origin}: {err.reason}") from err
+
+    rows = body.get("updated") if isinstance(body, dict) else None
+    if not rows:
+        # Reported per-item rather than as a status code, so surface it.
+        errors = (body or {}).get("errors") if isinstance(body, dict) else None
+        detail = errors[0].get("error") if errors else "no item was updated"
+        raise LedgrError(f"Ledgr didn't update the song: {detail}")
+
+    item = rows[0] if isinstance(rows[0], dict) else {}
+    return Uploaded(
+        item_id=str(item.get("id", item_id)),
+        title=str(item.get("title") or title),
+        url=f"{origin}/items/{item.get('id', item_id)}",
     )
 
 

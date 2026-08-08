@@ -661,7 +661,8 @@ _NAV_JS = """
       var count = Object.keys(placed).length;
       var tail = '<span class="pcount">' + count + ' placed' +
                  (dirty ? ' &middot; <b>unsaved</b>' : '') + '</span>' +
-                 '<button class="small" data-act="save">Save</button>';
+                 '<button class="small" data-act="save">Save</button>' +
+                 '<button class="small go" data-act="push">Push to Cloud</button>';
 
       if (mode === 'pinned') {
         var live = chordAt(audio.currentTime || 0);
@@ -825,6 +826,24 @@ _NAV_JS = """
       if (!btn) return;
       var act = btn.dataset.act;
       if (act === 'save') save();
+      // Save first, then push -- pushing what's on disk while the screen holds
+      // newer placements would send a chart you can see is out of date.
+      if (act === 'push') {
+        btn.textContent = 'Pushing…';
+        save().then(function () {
+          return fetch('/ledgr/' + songId, { method: 'POST' })
+            .then(function (r) {
+              return r.json().then(function (b) { return { ok: r.ok, b: b }; });
+            });
+        }).then(function (res) {
+          if (!res.ok) throw new Error(res.b.error || 'push failed');
+          btn.textContent = res.b.updated ? 'Updated ✓' : 'Created ✓';
+          window.open(res.b.url, '_blank');
+        }).catch(function (err) {
+          btn.textContent = 'Push to Cloud';
+          window.alert('Push failed — ' + err.message);
+        });
+      }
       if (act === 'place') {
         var row = chordAt(audio.currentTime || 0);
         if (row) { pick = spell(row.r, row.q); status(); }
@@ -998,7 +1017,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 15
+RENDER_VERSION = 16
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

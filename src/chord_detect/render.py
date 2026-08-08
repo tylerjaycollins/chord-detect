@@ -235,6 +235,10 @@ def render_html(
         lyricstab=(
             '<button role="tab" aria-selected="false" data-view="lyrics">'
             "Lyrics</button>"
+            '<button role="tab" aria-selected="false" data-view="manual">'
+            "Chart (Manual)</button>"
+            '<button role="tab" aria-selected="false" data-view="pinned">'
+            "Chart (Pinned)</button>"
             if nav
             else ""
         ),
@@ -537,6 +541,211 @@ _NAV_JS = """
     poll();
   })();
 
+  // ---- Manual chord placement -------------------------------------------
+  // Two ways at the same job, sharing one implementation.
+  //   manual  -- pick any chord, put it on any word, in any order.
+  //   pinned  -- step through the detected chord changes in order. Each carries
+  //              its own timestamp, which is the part of the analysis that
+  //              proved trustworthy, so a placed chart still knows where it
+  //              sits in the recording even though lyric timing doesn't.
+  function placement(mode) {
+    var songId = window.location.pathname.split('/').pop();
+    var bar = document.getElementById(mode + 'bar');
+    var wrap = document.getElementById(mode + 'words');
+    if (!bar || !wrap) return null;
+
+    var LINES = [];          // {label, words:[..]}
+    var placed = {};         // "line:word" -> {chord, t}
+    var queue = [];          // pinned: the detected chord run
+    var at = 0;              // pinned: position in that run
+    var pick = null;         // manual: chord awaiting a word
+    var dirty = false;
+
+    function key(l, w) { return l + ':' + w; }
+
+    function chordList() {
+      var seen = [], out = [];
+      (TIMELINE || []).forEach(function (row) {
+        if (row.c && row.c !== 'N' && seen.indexOf(row.c) < 0) {
+          seen.push(row.c); out.push(row.c);
+        }
+      });
+      return out;
+    }
+
+    function buildQueue() {
+      queue = (TIMELINE || []).filter(function (row) {
+        return row.c && row.c !== 'N';
+      });
+    }
+
+    function save() {
+      var rows = Object.keys(placed).map(function (k) {
+        var parts = k.split(':');
+        return {
+          line: parseInt(parts[0], 10), word: parseInt(parts[1], 10),
+          chord: placed[k].chord, t: placed[k].t
+        };
+      });
+      return fetch('/placement/' + songId + '/' + mode, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ placements: rows })
+      }).then(function () { dirty = false; status(); });
+    }
+
+    function status() {
+      var count = Object.keys(placed).length;
+      if (mode === 'pinned') {
+        var now = queue[at];
+        bar.innerHTML =
+          '<span class="pnext">' +
+          (now ? 'Place <b>' + now.c + '</b> &middot; ' + fmt(now.t) : 'All placed') +
+          '</span>' +
+          '<button class="small" data-act="hear">Hear it</button>' +
+          '<button class="small" data-act="skip">Skip</button>' +
+          '<button class="small" data-act="undo">Undo</button>' +
+          '<span class="pcount">' + at + ' / ' + queue.length +
+          ' &middot; ' + count + ' placed' + (dirty ? ' &middot; unsaved' : '') + '</span>' +
+          '<button class="small" data-act="save">Save</button>';
+      } else {
+        bar.innerHTML =
+          '<span class="pnext">' +
+          (pick ? 'Click a word for <b>' + pick + '</b>' : 'Pick a chord') +
+          '</span>' +
+          '<span class="ppal">' + chordList().map(function (c) {
+            return '<button class="chip' + (c === pick ? ' on' : '') +
+                   '" data-chord="' + c + '">' + c + '</button>';
+          }).join('') + '</span>' +
+          '<span class="pcount">' + count + ' placed' +
+          (dirty ? ' &middot; unsaved' : '') + '</span>' +
+          '<button class="small" data-act="save">Save</button>';
+      }
+    }
+
+    function draw() {
+      wrap.innerHTML = '';
+      var section = null;
+      LINES.forEach(function (line, li) {
+        if (line.label !== section) {
+          section = line.label;
+          var h = document.createElement('div');
+          h.className = 'lsection';
+          h.textContent = section;
+          wrap.appendChild(h);
+        }
+        var row = document.createElement('div');
+        row.className = 'pline';
+        line.words.forEach(function (word, wi) {
+          var slot = document.createElement('span');
+          slot.className = 'pword';
+          var here = placed[key(li, wi)];
+          if (here) {
+            var c = document.createElement('span');
+            c.className = 'pchord';
+            c.textContent = here.chord;
+            slot.appendChild(c);
+            slot.classList.add('has');
+          }
+          var t = document.createElement('span');
+          t.className = 'ptext';
+          t.textContent = word;
+          slot.appendChild(t);
+          slot.addEventListener('click', function (ev) {
+            if (ev.shiftKey || ev.altKey) { clear(li, wi); return; }
+            put(li, wi);
+          });
+          row.appendChild(slot);
+        });
+        wrap.appendChild(row);
+      });
+      status();
+    }
+
+    function put(li, wi) {
+      if (mode === 'pinned') {
+        var now = queue[at];
+        if (!now) return;
+        placed[key(li, wi)] = { chord: now.c, t: now.t };
+        at += 1;
+      } else {
+        if (!pick) return;
+        placed[key(li, wi)] = { chord: pick, t: null };
+      }
+      dirty = true;
+      draw();
+    }
+
+    function clear(li, wi) {
+      if (placed[key(li, wi)]) {
+        delete placed[key(li, wi)];
+        dirty = true;
+        draw();
+      }
+    }
+
+    bar.addEventListener('click', function (ev) {
+      var chip = ev.target.closest ? ev.target.closest('[data-chord]') : null;
+      if (chip) { pick = chip.dataset.chord; status(); return; }
+      var btn = ev.target.closest ? ev.target.closest('[data-act]') : null;
+      if (!btn) return;
+      var act = btn.dataset.act;
+      if (act === 'save') save();
+      if (act === 'skip') { at = Math.min(queue.length, at + 1); status(); }
+      if (act === 'undo') { at = Math.max(0, at - 1); status(); }
+      if (act === 'hear') {
+        var now = queue[at];
+        if (now) { audio.currentTime = Math.max(0, now.t - 1); audio.play(); update(); }
+      }
+    });
+
+    function load() {
+      buildQueue();
+      return fetch('/lyrics/' + songId).then(function (r) { return r.json(); })
+        .then(function (d) {
+          LINES = linesFrom(d.lyrics || '');
+          if (!LINES.length) {
+            bar.innerHTML = '<span class="pnext">Add lyrics on the Lyrics tab first.</span>';
+            wrap.innerHTML = '';
+            return;
+          }
+          return fetch('/placement/' + songId + '/' + mode)
+            .then(function (r) { return r.json(); })
+            .then(function (p) {
+              placed = {};
+              (p.placements || []).forEach(function (row) {
+                placed[key(row.line, row.word)] = { chord: row.chord, t: row.t };
+              });
+              // Resume where the queue left off rather than from the top.
+              if (mode === 'pinned') at = Math.min(queue.length, (p.placements || []).length);
+              draw();
+            });
+        });
+    }
+
+    return { load: load, redraw: draw };
+  }
+
+  // Section markers are [Verse 1] style; everything else is a sung line.
+  function linesFrom(text) {
+    var out = [], label = 'Song';
+    text.split('\\n').forEach(function (raw) {
+      var s = raw.trim().replace(/^\\\\\\[/, '[').replace(/\\\\\\]$/, ']');
+      if (!s) return;
+      var m = s.match(/^\\[(.+?)\\]$/);
+      if (m) { label = m[1]; return; }
+      out.push({ label: label, words: s.split(/\\s+/) });
+    });
+    return out;
+  }
+
+  var PLACERS = { manual: placement('manual'), pinned: placement('pinned') };
+  Object.keys(PLACERS).forEach(function (mode) {
+    var tab = document.querySelector('.tabs button[data-view="' + mode + '"]');
+    if (tab && PLACERS[mode]) {
+      tab.addEventListener('click', function () { PLACERS[mode].load(); });
+    }
+  });
+
   // Upload to Ledgr. The button only appears when the server has a token, so
   // the common no-token case is a hidden button rather than a failed click.
   fetch('/ledgr').then(function (r) { return r.json(); }).then(function (cfg) {
@@ -569,7 +778,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 8
+RENDER_VERSION = 9
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -666,6 +875,28 @@ _TEMPLATE = """<!doctype html>
     font-variant-numeric: tabular-nums; }}
   .lflag {{ color: #b5793f; font-size: .68rem; text-transform: uppercase;
     letter-spacing: .05em; margin-left: auto; }}
+
+  /* Chord placement */
+  .placebar {{ position: sticky; top: 0; z-index: 4; display: flex; gap: 10px;
+    align-items: center; flex-wrap: wrap; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    margin-bottom: 16px; }}
+  .pnext {{ font-size: .9rem; color: var(--ink); }}
+  .pnext b {{ color: var(--gold); }}
+  .pcount {{ margin-left: auto; color: var(--dim); font-size: .76rem; }}
+  .ppal {{ display: flex; gap: 5px; flex-wrap: wrap; }}
+  .chip {{ background: var(--cell); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 9px; font-size: .82rem; font-weight: 600;
+    cursor: pointer; }}
+  .chip.on {{ background: var(--gold); color: #16202e; border-color: var(--gold); }}
+  .pline {{ display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 12px; }}
+  .pword {{ position: relative; padding: 18px 3px 3px; border-radius: 5px;
+    cursor: pointer; line-height: 1.35; }}
+  .pword:hover {{ background: var(--cell); }}
+  .pword.has {{ background: rgba(232,201,138,.10); }}
+  .pchord {{ position: absolute; top: 1px; left: 3px; color: var(--gold);
+    font-size: .76rem; font-weight: 700; white-space: nowrap; }}
+  .ptext {{ font-size: .98rem; }}
 
   /* Transport */
   .transport {{
@@ -780,9 +1011,9 @@ _TEMPLATE = """<!doctype html>
 </div>
 
 <div class="tabs" role="tablist">
-  <button role="tab" aria-selected="{chart_sel}" data-view="chart">Chart</button>
   <button role="tab" aria-selected="{grid_sel}" data-view="grid">Beats &amp; measures</button>
   {lyricstab}
+  <button role="tab" aria-selected="{chart_sel}" data-view="chart">Chart</button>
 </div>
 
 <section class="view" id="chart"{chart_hidden}>
@@ -793,6 +1024,16 @@ _TEMPLATE = """<!doctype html>
 <section class="view" id="lyrics" hidden>
   <div id="lyricstate"></div>
   <div id="lyriclines"></div>
+</section>
+
+<section class="view" id="manual" hidden>
+  <div class="placebar" id="manualbar"></div>
+  <div class="placewords" id="manualwords"></div>
+</section>
+
+<section class="view" id="pinned" hidden>
+  <div class="placebar" id="pinnedbar"></div>
+  <div class="placewords" id="pinnedwords"></div>
 </section>
 
 <section class="view" id="grid"{grid_hidden}>

@@ -529,6 +529,30 @@ the CLI → Ledgr handoff proves annoying in practice.
 - [ ] Consider downsampling to 11 kHz — chord content lives below 2 kHz, so
       the top octave of the CQT is mostly wasted work.
 
+## Chord editing — the next real gap (2026-08-08)
+
+Manual placement makes the chord list itself the limiting factor. Three
+distinct problems, all reported from real use:
+
+- [ ] **Extra chords.** The detector emits changes that aren't musically there,
+      so the pinned queue contains chords with nowhere to go. Placement needs a
+      *skip* that deletes rather than defers, and it should be easy to bulk-drop
+      a run of them.
+- [ ] **Wrong chords.** Detection is 88-98% on chart chords, so a handful per
+      song are simply wrong and need replacing while placing.
+- [ ] **Chords heard differently.** Distinct from wrong: the detector is
+      defensible but a different voicing is wanted. Same edit affordance, but
+      worth remembering it isn't a bug to fix in detection.
+
+Together these argue for chord editing living next to placement rather than
+being a separate mode: change the chord, then place it.
+
+- [ ] Forced alignment (`align.py`) is no longer what drives the UI. Real use
+      found chord timing reliable and *lyric* timing not, which matches the
+      measurements (59% exact word placement). Kept in the tree because the
+      windowing findings are worth something and it may return as a pre-fill
+      once chord editing lands — but nothing should depend on it.
+
 ## Maintenance / housekeeping
 
 - [ ] **Run `scripts/check_js.py` before committing changes to `render.py`.**

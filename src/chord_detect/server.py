@@ -408,6 +408,69 @@ class _StoredAnalysis:
         ]
 
 
+def _placed_chordpro(folder: Path, title: str) -> str | None:
+    """ChordPro from hand-placed chords, or None if nothing's been placed.
+
+    Prefers whichever mode was worked on most recently, since the two are
+    alternative ways at the same song rather than a pipeline.
+    """
+    lyrics_file = folder / "lyrics.txt"
+    if not lyrics_file.exists():
+        return None
+
+    candidates = [
+        path
+        for path in (_placement_file(folder, m) for m in PLACEMENT_MODES)
+        if path.exists()
+    ]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    data = json.loads(newest.read_text())
+    rows = data.get("placements") or []
+    if not rows:
+        return None
+
+    from .align import parse_lyrics, expand_repeats
+
+    sections = expand_repeats(parse_lyrics(lyrics_file.read_text()))
+    flat: list[tuple[str, str]] = []
+    for section in sections:
+        for text in section.lines:
+            flat.append((section.label, text))
+
+    by_line: dict[int, dict[int, str]] = {}
+    for row in rows:
+        by_line.setdefault(row["line"], {})[row["word"]] = row["chord"]
+
+    analysis_file = folder / "analysis.json"
+    meta = json.loads(analysis_file.read_text()) if analysis_file.exists() else {}
+
+    out = [f"{{title: {title}}}"]
+    if meta.get("key"):
+        out.append(f"{{key: {meta['key']}}}")
+    if meta.get("tempo"):
+        out.append(f"{{tempo: {meta['tempo']:.0f}}}")
+    if meta.get("meter"):
+        out.append(f"{{time: {meta['meter']}/4}}")
+
+    section_label = None
+    for index, (label, text) in enumerate(flat):
+        if label != section_label:
+            section_label = label
+            out.append("")
+            out.append(f"{{section: {label}}}")
+        chords = by_line.get(index, {})
+        words = text.split()
+        out.append(
+            " ".join(
+                (f"[{chords[i]}]{w}" if i in chords else w)
+                for i, w in enumerate(words)
+            )
+        )
+    return "\n".join(out) + "\n"
+
+
 def _aligned_chordpro(folder: Path, title: str) -> str | None:
     """ChordPro with chords over words, or None if that isn't possible yet."""
     analysis_file = folder / "analysis.json"
@@ -545,6 +608,76 @@ def get_align(job_id: str) -> JSONResponse:
                          "error": (job or {}).get("error"), **data})
 
 
+PLACEMENT_MODES = {"manual", "pinned"}
+
+
+def _placement_file(folder: Path, mode: str) -> Path:
+    return folder / f"placement-{mode}.json"
+
+
+@app.get("/placement/{job_id}/{mode}")
+def get_placement(job_id: str, mode: str) -> JSONResponse:
+    """Saved chord-over-word placements for one mode.
+
+    The two modes keep separate files on purpose: they're different ways of
+    working the same song, and one shouldn't overwrite the other's progress.
+    """
+    if mode not in PLACEMENT_MODES:
+        raise HTTPException(404, "No such placement mode")
+    path = _placement_file(CACHE / job_id, mode)
+    if not path.exists():
+        return JSONResponse({"placements": [], "saved": False})
+    return JSONResponse({**json.loads(path.read_text()), "saved": True})
+
+
+@app.put("/placement/{job_id}/{mode}")
+async def put_placement(job_id: str, mode: str, request: Request) -> JSONResponse:
+    """Save placements. Each is {line, word, chord} plus an optional time.
+
+    `t` is what "pinned" adds: the detected chord's own timestamp, which is the
+    part of the analysis that proved trustworthy. Carrying it means a placed
+    chart still knows where it sits in the recording.
+    """
+    if mode not in PLACEMENT_MODES:
+        raise HTTPException(404, "No such placement mode")
+    folder = CACHE / job_id
+    if not folder.exists():
+        raise HTTPException(404, "No such song")
+
+    payload = await request.json()
+    rows = payload.get("placements")
+    if not isinstance(rows, list):
+        raise HTTPException(400, "Expected a 'placements' list.")
+
+    cleaned = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            cleaned.append(
+                {
+                    "line": int(row["line"]),
+                    "word": int(row["word"]),
+                    "chord": str(row["chord"]),
+                    "t": float(row["t"]) if row.get("t") is not None else None,
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    lyrics_file = folder / "lyrics.txt"
+    stamp = ""
+    if lyrics_file.exists():
+        from .align import lyrics_hash
+
+        stamp = lyrics_hash(lyrics_file.read_text())
+
+    _placement_file(folder, mode).write_text(
+        json.dumps({"placements": cleaned, "lyrics_hash": stamp, "mode": mode})
+    )
+    return JSONResponse({"saved": True, "count": len(cleaned)})
+
+
 @app.post("/ledgr/{job_id}")
 def to_ledgr(job_id: str) -> JSONResponse:
     """Push a built chart into Ledgr as a song item.
@@ -562,10 +695,14 @@ def to_ledgr(job_id: str) -> JSONResponse:
     # Prefer chords positioned over words. That's the whole point of alignment,
     # and it's what saves the work in Ledgr; bar notation is the fallback when
     # a song has no lyrics or hasn't been aligned.
+    # Hand-placed chords win: they're what the user actually decided. Automatic
+    # alignment is the fallback, and bar notation the fallback to that.
     source = path.read_text()
-    aligned = _aligned_chordpro(CACHE / job_id, title)
-    if aligned:
-        source = aligned
+    for build in (_placed_chordpro, _aligned_chordpro):
+        candidate = build(CACHE / job_id, title)
+        if candidate:
+            source = candidate
+            break
 
     try:
         result = ledgr.upload_song(source, title=title)

@@ -9,15 +9,19 @@ still `chord-detect`.
 ## The app
 
 ```bash
-uv run python scripts/make_app.py   # build "Overtone.app" in ~/Applications
-uv run chord-detect-app             # or just run it from a terminal
+desktop/install.sh          # build "Overtone.app" (its own window) into ~/Applications
+uv run chord-detect-app     # or just run it from a terminal, in Safari, on port 8770
 ```
 
-The bundle is a thin launcher, not a frozen copy — it runs this repo, so edits
-take effect without rebuilding. Double-click it (or find it in Spotlight) and it
-starts the server if needed and opens the browser. Launching twice just reopens
-the tab rather than fighting over the port. Logs go to
-`~/Library/Logs/chord-detect.log`.
+`Overtone.app` is a small Tauri app (`desktop/`): its own window and Dock icon,
+no browser tab. At launch it picks a free port, starts this repo's server on it
+from `.venv` (no `uv` needed at launch), and quitting the app stops the server.
+It runs this repo rather than a frozen copy, so Python edits take effect on the
+next launch or the page's Restart button; rebuild only when `desktop/` changes.
+Downloads land in `~/Downloads` and show in Finder; links to Ledgr open in your
+browser. Logs go to `~/Library/Logs/chord-detect.log`.
+
+`scripts/make_app.py` builds the older Safari-tab launcher; it's superseded.
 
 Drop in a song, watch the progress, and land on a chart you can play along with:
 the current measure highlights, a playhead rides across it, and pausing anywhere

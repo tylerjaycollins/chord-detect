@@ -1,0 +1,18 @@
+[package]
+name = "overtone"
+version = "0.1.0"
+edition = "2021"
+description = "Overtone desktop app: its own window around the chord-detect server"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+
+[profile.release]
+# Small app, built rarely: favour a small binary over build time.
+lto = true
+codegen-units = 1
+strip = true

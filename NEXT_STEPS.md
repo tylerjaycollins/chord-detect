@@ -528,6 +528,43 @@ in-app editor uses, so the surface can't drift from Ledgr's contract.
 
 ## Desktop app (deprioritized)
 
+**Rust rewrite, talked through 2026-11-02.** Tyler asked what a Rust Overtone
+would take. Sequence agreed in principle: **accuracy first, in Python, then
+port.** Tyler: the chords "aren't that accurate", so porting today's models to
+Rust only reproduces weak output at high cost. Iterate on accuracy here (timed
+ground truth, Demucs stems, checkpoint A/Bs, see "Accuracy upgrades" and
+"Model upgrade candidates"), then port whichever models win.
+
+- [x] **Option A: Tauri shell around the existing Python.** Built 2026-11-05
+      (`desktop/`, install with `desktop/install.sh`). Own window and Dock
+      icon, no Safari tab. Picks a free port at launch and passes it as
+      `OVERTONE_PORT`, so it can't collide with another local server (the
+      2026-11-02 bug: test-prep took 8765 and Overtone opened a quiz folder).
+      The server exits when the app does (`OVERTONE_PARENT_PID` watchdog, which
+      also covers the page's Restart). Downloads go to ~/Downloads and reveal
+      in Finder; off-app links (Ledgr) open in the browser; the page's own
+      drop zone gets dragged files.
+      **Assumed, change it if you want:** Python is *not* bundled. The app runs
+      the repo's `.venv/bin/chord-detect-app` directly, so `uv` isn't needed at
+      launch and code edits still take effect without a rebuild, but the app
+      only works on this Mac with this checkout. Full bundling means a ~1 GB+
+      app (torch) and a rebuild for every Python change.
+- [ ] Check by hand in the app (no tool reaches these yet): drag a song onto
+      the drop zone, Download .cho lands in ~/Downloads, Upload to Ledgr and
+      its "open" link go to the browser.
+- [ ] **Option B, full Rust (Tauri + Rust analysis).** Easy parts: chart page
+      and editor (already HTML/JS, moves into the webview), theory, key, suggest,
+      ChordPro, Ledgr push (~1,500 lines), audio decode (`symphonia`, drops
+      ffmpeg). Hard parts: the features (CQT/chroma) must match `librosa`
+      closely or the models lose accuracy silently; and the three models
+      (Chord-CNN-LSTM's 5 nets + HMM, BTC, beat_this) must export to ONNX and
+      run via `ort` (CoreML) or be ported to `candle`. Chord-CNN-LSTM is 2019
+      research code, the likeliest blocker.
+      - First step if B goes ahead: an export spike on the default model only,
+        before any app code. Freeze golden outputs from the Python version on
+        `testdata/` and switch each model over only when Rust matches them.
+      - Read `~/Development/RUST Rules.md` and `RUST Lessons.md` before starting.
+
 Was going to be a Tauri shell with an editable grid. Ledgr makes most of that
 redundant. What's left that Ledgr *doesn't* do is audio-anchored playback —
 hearing the song while watching the beat cursor move. Worth revisiting only if

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overtone</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #16202e; color: #dbe4f0;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-user-select: none; cursor: default;
+  }
+  .box { text-align: center; max-width: 30rem; padding: 0 1.5rem; }
+  .spinner {
+    width: 28px; height: 28px; margin: 0 auto 1rem;
+    border: 3px solid #2c3b52; border-top-color: #7fb2ff; border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.25rem; }
+  p { margin: 0.25rem 0; color: #9fb0c6; }
+  code { -webkit-user-select: text; color: #dbe4f0; }
+  .error .spinner { display: none; }
+  .error h1 { color: #ff9b8f; }
+</style>
+</head>
+<body>
+  <div class="box" id="box">
+    <div class="spinner"></div>
+    <h1 id="title">Starting Overtone…</h1>
+    <p id="detail">This takes a few seconds.</p>
+  </div>
+<script>
+  // Called from the Rust side when the server can't be started.
+  function showError(title, detail) {
+    document.getElementById('box').className = 'box error';
+    document.getElementById('title').textContent = title;
+    document.getElementById('detail').innerHTML = detail;
+  }
+</script>
+</body>
+</html>

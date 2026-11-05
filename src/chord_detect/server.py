@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import sys
+import subprocess
 import threading
 import traceback
 import uuid
@@ -827,6 +830,56 @@ def to_ledgr(job_id: str) -> JSONResponse:
     )
 
 
+# The desktop app (desktop/) picks a free port at launch and passes it here, so
+# Overtone can never land on a port another local server already holds (on
+# 2026-11-02 the test-prep server took 8765 and Overtone opened a quiz folder).
+# 8770 stays the default for `uv run chord-detect-app` from a terminal.
+PORT = int(os.environ.get("OVERTONE_PORT", "8770"))
+
+
+@app.post("/restart")
+def restart() -> JSONResponse:
+    """Relaunch the server so edited code takes effect.
+
+    The app runs headless (`LSUIElement`), so there is no window to close and no
+    Dock icon to quit: short of finding the process in a terminal, a running
+    Overtone could not be restarted at all, and every fix sat on disk unused
+    until someone knew to go looking for it.
+
+    A detached child waits for this process to let go of the port and then
+    starts a fresh one; exiting is what frees the port, so the exit has to come
+    after the response is on the wire -- hence the timer rather than exiting
+    here. `os._exit` on purpose: a clean shutdown would have uvicorn wait on the
+    connection this response is travelling over.
+    """
+    log = Path.home() / "Library" / "Logs" / "chord-detect.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    relaunch = (
+        # Poll rather than sleep a fixed amount: the port frees when this
+        # process dies, and binding before that fails outright.
+        f'for i in $(seq 1 50); do '
+        f'  curl -s -o /dev/null --max-time 1 http://127.0.0.1:{PORT}/ || break; '
+        f'  sleep 0.2; '
+        f'done; '
+        # The page that asked for the restart is already open and waiting for
+        # the server to answer again; opening another tab on top of it is just
+        # litter, one per restart.
+        f'OVERTONE_NO_BROWSER=1 exec "{sys.executable}" "{sys.argv[0]}"'
+    )
+    with log.open("a") as handle:
+        handle.write("--- restart requested ---\n")
+        subprocess.Popen(
+            ["/bin/sh", "-c", relaunch],
+            start_new_session=True,  # outlives this process
+            stdout=handle,
+            stderr=handle,
+        )
+
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return JSONResponse({"restarting": True})
+
+
 @app.get("/ledgr")
 def ledgr_status() -> JSONResponse:
     """Whether a token is configured, so the page can hide the button."""
@@ -1200,15 +1253,54 @@ _INDEX = """<!doctype html>
 """
 
 
+def _open_ui(url: str) -> None:
+    """Show the app in Safari.
+
+    Named rather than the default browser on purpose: the default here is
+    Chrome, and Overtone is meant to stay in Safari alongside everything else
+    the charts get used with. Falls through to the default browser if Safari
+    isn't there to be driven -- on a non-Mac, or if the lookup fails.
+    """
+    try:
+        webbrowser.get("safari").open(url)
+    except webbrowser.Error:
+        webbrowser.open(url)
+
+
+def _exit_with_parent(pid: int) -> None:
+    """Stop when the desktop app that started this server is gone.
+
+    The app also kills its own child on quit, but /restart replaces that child
+    with a detached one the app never knew about. Watching the app's pid covers
+    both, and a crash of the app too, so no server is left running headless.
+    """
+    import time
+
+    while True:
+        time.sleep(2)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            os._exit(0)
+        except PermissionError:
+            pass  # exists, just not ours to signal
+
+
 def main() -> None:
     import uvicorn
 
-    port = 8765
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{PORT}"
     CACHE.mkdir(parents=True, exist_ok=True)
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    parent = os.environ.get("OVERTONE_PARENT_PID")
+    if parent and parent.isdigit():
+        threading.Thread(
+            target=_exit_with_parent, args=(int(parent),), daemon=True
+        ).start()
+    # Set by /restart: the browser is already sitting on the page that asked.
+    if not os.environ.get("OVERTONE_NO_BROWSER"):
+        threading.Timer(0.8, lambda: _open_ui(url)).start()
     print(f"Overtone running at {url}  (ctrl-c to stop)")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 
 
 if __name__ == "__main__":

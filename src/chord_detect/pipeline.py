@@ -26,6 +26,7 @@ from .features import (
     time_to_frames,
 )
 from .key import KeyEstimate, estimate_key, estimate_key_from_chords
+from .meter import SIGNATURES, lock_grid, snap_changes
 from .theory import transpose_label
 
 ProgressFn = Callable[[str, float], None]
@@ -65,6 +66,20 @@ class Analysis:
     # Per-beat alternatives, precomputed so an offline page can answer "what
     # else fits here?" instantly without a Python round trip.
     beat_options: list[BeatOptions] = field(default_factory=list)
+    # Set when the whole song was locked onto one steady grid (see meter.py):
+    # the signature as musicians write it ("6/8"), every subdivision tick, and
+    # which tick starts the first bar. Kept so bars can be redrawn in another
+    # signature or phase without re-analysing the audio.
+    time_signature: str | None = None
+    ticks: list[float] = field(default_factory=list)
+    bar_phase: int = 0
+
+    @property
+    def signature(self) -> str | None:
+        """Time signature for display: "6/8" when locked, else beats-per-bar/4."""
+        if self.time_signature:
+            return self.time_signature
+        return f"{self.meter}/4" if self.meter else None
 
     # -- views ------------------------------------------------------------
 
@@ -142,6 +157,9 @@ class Analysis:
                 )
                 for b in data.get("beat_options", [])
             ],
+            time_signature=data.get("time_signature"),
+            ticks=list(data.get("ticks", [])),
+            bar_phase=int(data.get("bar_phase", 0)),
         )
 
     @classmethod
@@ -157,6 +175,7 @@ def analyze(
     beat_sync: bool = True,
     suggestions: bool = False,
     model: str = "cnnlstm",
+    signature: str | None = None,
     progress: ProgressFn | None = None,
 ) -> Analysis:
     """Analyze one audio file.
@@ -236,8 +255,24 @@ def analyze(
     # than raw spectral energy.
     key = estimate_key(chroma) if chroma is not None else estimate_key_from_chords(spans)
 
-    # Chord changes are the best evidence for where bar lines really fall.
-    grid = align_downbeat_phase(grid, spans)
+    # Lock the whole song onto one steady grid in one signature; chord changes
+    # decide where bar lines fall. Falls back to the tracker's own grid (phase
+    # corrected by the same chord evidence) when the song isn't steady.
+    report("Locking the beat grid", 0.95)
+    changes = [s.start for s in spans[1:] if s.label != "N"]
+    locked = lock_grid(clip, changes, signature=signature)
+    if locked is not None:
+        per_beat, _ = SIGNATURES[locked.signature]
+        spans = _snap_spans(spans, locked)
+        grid = BeatGrid(
+            beats=locked.beats,
+            downbeats=locked.downbeats,
+            tempo=60.0 / (locked.tick_period * per_beat),
+            source=f"{grid.source}+locked",
+            meter=locked.beats_per_bar,
+        )
+    else:
+        grid = align_downbeat_phase(grid, spans)
 
     analysis = Analysis(
         path=str(Path(path).resolve()),
@@ -253,6 +288,10 @@ def analyze(
     )
     analysis.measures = build_measures(analysis, grid)
     analysis.beat_options = beat_options
+    if locked is not None:
+        analysis.time_signature = locked.signature
+        analysis.ticks = [float(t) for t in locked.ticks]
+        analysis.bar_phase = locked.phase
 
     report("Done", 1.0)
     return analysis
@@ -355,6 +394,32 @@ def _downbeat_flags(
 
     distance = np.abs(starts[:, None] - downbeats[None, :]).min(axis=1)
     return distance <= tolerance
+
+
+def _snap_spans(spans: list[ChordSpan], locked) -> list[ChordSpan]:
+    """Move chord changes onto the locked grid, keeping spans contiguous."""
+    if len(spans) < 2:
+        return spans
+    snapped = snap_changes(
+        [s.start for s in spans[1:]], locked.beats, locked.downbeats, locked.tick_period,
+        bar_reach=1.5 if locked.signature == "6/8" else 1.05,
+    )
+    out = [ChordSpan(spans[0].label, spans[0].start, spans[0].end, spans[0].confidence)]
+    for span, start in zip(spans[1:], snapped):
+        start = max(start, out[-1].start)
+        if start >= span.end - 1e-6:
+            # Snapped past its own end: too short to keep on this grid, so the
+            # chord before it holds on instead.
+            out[-1].end = max(out[-1].end, span.end)
+            continue
+        out[-1].end = start
+        if out[-1].end - out[-1].start <= 1e-6:
+            out.pop()
+        if out and out[-1].label == span.label:
+            out[-1].end = span.end
+            continue
+        out.append(ChordSpan(span.label, start, span.end, span.confidence))
+    return out
 
 
 def align_downbeat_phase(grid: BeatGrid, spans: list[ChordSpan]) -> BeatGrid:

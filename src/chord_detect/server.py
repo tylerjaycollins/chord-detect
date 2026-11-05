@@ -7,7 +7,7 @@ and the browser polls for progress rather than staring at a dead request.
 Results are cached by file content hash, so reopening a song you've already
 analyzed is instant even if you renamed or moved it.
 
-    chord-detect-app          # opens http://127.0.0.1:8765
+    chord-detect-app          # opens http://127.0.0.1:8770
 """
 
 from __future__ import annotations
@@ -148,6 +148,7 @@ def _run(job: Job, audio_path: Path, out_dir: Path, options: dict) -> None:
         )
         (out_dir / "song.cho").write_text(
             to_chordpro(analysis, title=job.name, capo=capo,
+                        sounding_key=original_key if shift else None,
                         measures_per_section=16)
         )
         (out_dir / "analysis.json").write_text(analysis.to_json())
@@ -165,6 +166,11 @@ def _run(job: Job, audio_path: Path, out_dir: Path, options: dict) -> None:
                 }
             )
         )
+        # Transcode now rather than on the first play: it costs a couple of
+        # seconds against a job that already took twenty, and the alternative is
+        # paying it while someone waits to hear the song.
+        _playback_audio(out_dir)
+
         job.stage = "Done"
         job.fraction = 1.0
     except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
@@ -336,9 +342,67 @@ def _rerender(folder: Path, job_id: str, stamp: dict) -> str | None:
     return html_text
 
 
+PLAYBACK = "playback.m4a"
+
+
+def _playback_audio(folder: Path) -> Path | None:
+    """A copy of the song that seeks accurately, built once and kept.
+
+    What an upload usually is: a VBR mp3 whose only seek index is a 100-entry
+    Xing table. That's about 1% of the file, so on a four-minute song a jump can
+    land as much as two seconds from where it was asked to -- and it stays off
+    until the next seek. Play from the start and every chord lines up to the end
+    of the song; click one measure and the whole chart is more than a bar out,
+    which reads as the chart being wrong rather than the seek being wrong. MP4
+    carries a per-sample table, so seeking is exact. (AAC's encoder priming
+    shifts playback by ~50ms, which is nothing against the two seconds it
+    removes.)
+
+    Analysis keeps using the original file — this exists only to be played.
+    Returns None when ffmpeg isn't installed, and playback falls back to the
+    upload, which is what it has always done.
+    """
+    out = folder / PLAYBACK
+    if out.exists():
+        return out
+
+    source = _audio_file(folder)
+    if source is None or not shutil.which("ffmpeg"):
+        return None
+
+    # Written aside and renamed: a half-transcoded file that got served once
+    # would be cached as the song and never rebuilt.
+    part = folder / (PLAYBACK + ".part")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-y", "-i", str(source),
+             # Album art rides along as a video stream; carrying it into the
+             # MP4 makes a file some players treat as a video.
+             "-vn", "-map", "0:a:0",
+             "-c:a", "aac", "-b:a", "192k",
+             # Named explicitly: ffmpeg infers the muxer from the extension, and
+             # the `.part` suffix leaves it with nothing to infer from.
+             "-f", "mp4", "-movflags", "+faststart", str(part)],
+            check=True, capture_output=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        part.unlink(missing_ok=True)
+        traceback.print_exc()
+        return None
+
+    part.replace(out)
+    return out
+
+
 @app.get("/audio/{job_id}")
 def audio(job_id: str) -> FileResponse:
-    for candidate in (CACHE / job_id).glob("audio.*"):
+    folder = CACHE / job_id
+    # Built on demand rather than only at upload, so songs analyzed before this
+    # existed get accurate seeking too, without re-analyzing them.
+    playback = _playback_audio(folder)
+    if playback is not None:
+        return FileResponse(playback, media_type="audio/mp4")
+    for candidate in folder.glob("audio.*"):
         return FileResponse(candidate)
     raise HTTPException(404, "Audio not found")
 
@@ -424,6 +488,9 @@ class _StoredAnalysis:
         self.duration = data.get("duration", 0.0)
         self.tempo = data.get("tempo", 0.0)
         self.meter = data.get("meter")
+        self.signature = data.get("time_signature") or (
+            f"{self.meter}/4" if self.meter else None
+        )
         self.key = data.get("key", "C")
         self.chords = [
             SimpleNamespace(
@@ -432,6 +499,17 @@ class _StoredAnalysis:
             )
             for c in data.get("chords", [])
         ]
+
+
+def _render_stamp(folder: Path) -> dict:
+    """What the chart was built with — capo, shift, shapes. Empty if missing."""
+    path = folder / "render.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except ValueError:
+        return {}
 
 
 def _placed_chordpro(folder: Path, title: str) -> str | None:
@@ -457,9 +535,17 @@ def _placed_chordpro(folder: Path, title: str) -> str | None:
     if not rows:
         return None
 
-    from .align import parse_lyrics, expand_repeats
+    from .align import parse_lyrics
 
-    sections = expand_repeats(parse_lyrics(lyrics_file.read_text()))
+    # Deliberately NOT expand_repeats. A placement is a line index counted the
+    # way the Manual/Pinned view counts them, and that view lists each line once
+    # -- `Bridge x2` is one bridge on screen, with one set of slots to click.
+    # Expanding here inserted a second copy the page never showed, so every line
+    # after the first repeat marker shifted: chords placed on the last chorus
+    # were written onto the repeat above it, and the section they were actually
+    # placed on came out bare. Repeats are an *alignment* need (the aligner walks
+    # the song as sung); the placed path must mirror the screen instead.
+    sections = parse_lyrics(lyrics_file.read_text())
     flat: list[tuple[str, str]] = []
     for section in sections:
         for text in section.lines:
@@ -473,12 +559,28 @@ def _placed_chordpro(folder: Path, title: str) -> str | None:
     meta = json.loads(analysis_file.read_text()) if analysis_file.exists() else {}
 
     out = [f"{{title: {title}}}"]
-    if meta.get("key"):
-        out.append(f"{{key: {meta['key']}}}")
+    # The chords below are shapes; key and capo are what say which song they
+    # add up to (see `chordpro.py` on why key is the sounding one). Both come
+    # from the page when the placements were saved, since that's the only record
+    # of what was on screen -- the render stamp only agrees for songs whose capo
+    # was never touched after building, and older placement files predate any of
+    # this being saved, so fall back to it rather than emitting nothing.
+    stamp = _render_stamp(folder)
+    key = data.get("key") or stamp.get("source_key") or meta.get("key")
+    capo = data.get("capo")
+    if capo is None:
+        capo = stamp.get("capo", 0)
+    if key:
+        out.append(f"{{key: {key}}}")
+    if capo:
+        out.append(f"{{capo: {capo}}}")
     if meta.get("tempo"):
         out.append(f"{{tempo: {meta['tempo']:.0f}}}")
-    if meta.get("meter"):
-        out.append(f"{{time: {meta['meter']}/4}}")
+    signature = meta.get("time_signature") or (
+        f"{meta['meter']}/4" if meta.get("meter") else None
+    )
+    if signature:
+        out.append(f"{{time: {signature}}}")
 
     # Every song has an intro, and it has no words to hang chords on -- so it's
     # written as bars rather than placed, and emitted before the sung sections.
@@ -555,7 +657,15 @@ def _aligned_chordpro(folder: Path, title: str) -> str | None:
         duration=data.get("duration", 0.0),
     )
     analysis = _StoredAnalysis(json.loads(analysis_file.read_text()), title)
-    return to_chordpro_with_lyrics(analysis, alignment, title=title)
+    # The stored analysis was already transposed into the shapes, so the key to
+    # write is the one the song sounds in, not the analysis's own. No live capo
+    # to consult here -- an aligned export has no placement file behind it.
+    stamp = _render_stamp(folder)
+    return to_chordpro_with_lyrics(
+        analysis, alignment, title=title,
+        capo=int(stamp.get("capo") or 0),
+        sounding_key=stamp.get("source_key"),
+    )
 
 
 def _audio_file(folder: Path) -> Path | None:
@@ -717,11 +827,23 @@ async def put_placement(job_id: str, mode: str, request: Request) -> JSONRespons
         stamp = lyrics_hash(lyrics_file.read_text())
 
     intro = payload.get("intro")
+    # The capo, and the key the song sounds in at it. Chosen on the page after
+    # the chart was built, so `render.json` can be out of date about the capo --
+    # and the chords above were written down in whatever spelling it produced,
+    # so the export needs it to say what those shapes sound like.
+    try:
+        capo = int(payload.get("capo") or 0) % 12
+    except (TypeError, ValueError):
+        capo = 0
+    key = payload.get("key")
+
     _placement_file(folder, mode).write_text(
         json.dumps(
             {
                 "placements": cleaned,
                 "intro": intro if isinstance(intro, str) else "",
+                "capo": capo,
+                "key": key if isinstance(key, str) else "",
                 "lyrics_hash": stamp,
                 "mode": mode,
             }

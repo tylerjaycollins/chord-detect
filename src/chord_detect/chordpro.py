@@ -13,6 +13,15 @@ slash `/` where the previous chord is still sounding.
 Deliberately emits no lyrics — this module has no idea what the words are. The
 workflow is: analyze here, import to Ledgr, type the words in, and drag chords
 onto the right syllables there.
+
+One convention worth stating, because getting it backwards produces a chart that
+looks right and transposes wrong: to Ledgr, the chords written down are the
+*shapes* you play and `{key}` is how the song *sounds*, with the shapes derived
+as key minus capo (`keyOfCapo` in its transpose module, and its capo control
+rewrites the chords by the capo delta to hold the sounding key). So a Bb song
+played in G shapes is `{key: Bb}{capo: 3}` over G-family chords -- which is why
+`sounding_key` exists here: the analysis has already been transposed into the
+shapes by then, so its own key is the wrong one to write.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ def to_chordpro(
     *,
     title: str | None = None,
     capo: int = 0,
+    sounding_key: str | None = None,
     bars_per_line: int = 4,
     section_label: str = "Chart",
     measures_per_section: int | None = None,
@@ -43,12 +53,12 @@ def to_chordpro(
 
     name = title or Path(analysis.path).stem
     out.append(f"{{title: {name}}}")
-    out.append(f"{{key: {analysis.key}}}")
+    out.append(f"{{key: {sounding_key or analysis.key}}}")
     if capo:
         out.append(f"{{capo: {capo}}}")
     out.append(f"{{tempo: {analysis.tempo:.0f}}}")
-    if analysis.meter:
-        out.append(f"{{time: {analysis.meter}/4}}")
+    if analysis.signature:
+        out.append(f"{{time: {analysis.signature}}}")
 
     bars = _bars(analysis)
     if not bars:
@@ -125,6 +135,7 @@ def to_chordpro_with_lyrics(
     *,
     title: str | None = None,
     capo: int = 0,
+    sounding_key: str | None = None,
 ) -> str:
     """Render chords positioned over words, as `[G]word` inline brackets.
 
@@ -140,12 +151,12 @@ def to_chordpro_with_lyrics(
     out: list[str] = []
     name = title or Path(analysis.path).stem
     out.append(f"{{title: {name}}}")
-    out.append(f"{{key: {analysis.key}}}")
+    out.append(f"{{key: {sounding_key or analysis.key}}}")
     if capo:
         out.append(f"{{capo: {capo}}}")
     out.append(f"{{tempo: {analysis.tempo:.0f}}}")
-    if analysis.meter:
-        out.append(f"{{time: {analysis.meter}/4}}")
+    if analysis.signature:
+        out.append(f"{{time: {analysis.signature}}}")
 
     spans = [s for s in analysis.chords if s.label != "N"]
     used = set()

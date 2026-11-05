@@ -26,6 +26,7 @@ import numpy as np
 
 from .pipeline import Analysis
 from .theory import (
+    DEFAULT_MAX_CAPO,
     NO_CHORD,
     SHAPE_KEYS,
     label_roman,
@@ -184,7 +185,7 @@ def render_html(
     name = title or Path(analysis.path).stem
 
     minutes, seconds = divmod(int(analysis.duration), 60)
-    meter = f"{analysis.meter}/4" if analysis.meter else "—"
+    meter = analysis.signature or "—"
 
     sounding_key = transpose_label(analysis.key, -shift) if shift else analysis.key
     facts = [
@@ -223,6 +224,7 @@ def render_html(
             for s in SHAPE_KEYS
         ),
         capo0=capo,
+        max_capo=DEFAULT_MAX_CAPO,
         sounding=json.dumps(transpose_label(analysis.key, -shift)),
         # Beats & measures is the view you actually read while playing, so it
         # opens first -- unless there are no bar lines to draw, in which case
@@ -361,6 +363,8 @@ _NAV = """<nav class="nav">
   <select class="navsel" id="songswitch"><option value="">Recent songs…</option></select>
   <button class="navlink right" id="toledgr" hidden>Upload to Ledgr</button>
   <a class="navlink right" id="chodl" href="#" download>Download .cho</a>
+  <button class="navlink right" id="restart"
+          title="Relaunch the app so code changes take effect">Restart</button>
 </nav>"""
 
 # NOTE: single braces here. This string is passed *as an argument* to
@@ -653,8 +657,22 @@ _NAV_JS = """
     function save() {
       return fetch('/placement/' + songId + '/' + mode, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ placements: rows(), intro: intro })
-      }).then(function () { dirty = false; status(); });
+        // The capo lives only on screen until here, and it can be moved long
+        // after the chart was built. Chords are saved in the spelling they're
+        // shown in -- the shapes -- so without the capo beside them the export
+        // says nothing about what those shapes actually sound like. The key
+        // sent is the sounding one, which is the pairing Ledgr reads.
+        body: JSON.stringify({
+          placements: rows(), intro: intro, capo: capo, key: SOUNDING
+        })
+      }).then(function (r) {
+        // A failed save used to resolve like a successful one: the bar dropped
+        // its "unsaved" mark and a push straight after sent whatever was still
+        // on disk. Silently uploading a stale chart is the worst outcome here,
+        // so a bad save stays dirty and takes the push down with it.
+        if (!r.ok) throw new Error('save failed (' + r.status + ')');
+        dirty = false; status();
+      });
     }
 
     function status() {
@@ -838,7 +856,7 @@ _NAV_JS = """
         }).then(function (res) {
           if (!res.ok) throw new Error(res.b.error || 'push failed');
           btn.textContent = res.b.updated ? 'Updated ✓' : 'Created ✓';
-          window.open(res.b.url, '_blank');
+          openInLedgr(res.b.url);
         }).catch(function (err) {
           btn.textContent = 'Push to Cloud';
           window.alert('Push failed — ' + err.message);
@@ -924,7 +942,25 @@ _NAV_JS = """
         });
     }
 
-    return { load: load, redraw: draw };
+    return {
+      load: load, redraw: draw,
+      // Exposed so a push started from anywhere can flush this view first.
+      flush: function () { return dirty ? save() : Promise.resolve(); }
+    };
+  }
+
+  // Open a chart in Ledgr. A real link click rather than window.open: Safari
+  // treats window.open as a popup and hands it a small chromeless window, which
+  // is not how you want to read the song you just pushed. An anchor gets opened
+  // the way any other link would -- a full tab.
+  function openInLedgr(url) {
+    var a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   // Section markers are [Verse 1] style; everything else is a sung line.
@@ -950,6 +986,15 @@ _NAV_JS = """
     });
   };
 
+  // Write any unsaved placements to disk. The upload reads the `.cho` the
+  // server builds from what's on disk, so anything still only on screen would
+  // be quietly left out of the chart that lands in Ledgr.
+  window.__savePlacers = function () {
+    return Promise.all(Object.keys(PLACERS).map(function (mode) {
+      return PLACERS[mode] ? PLACERS[mode].flush() : Promise.resolve();
+    }));
+  };
+
   // Re-read one view from the server -- used after Pinned hands its work over,
   // so Manual shows the copied chords instead of whatever it had loaded.
   window.__reloadPlacer = function (mode) {
@@ -961,6 +1006,46 @@ _NAV_JS = """
       tab.addEventListener('click', function () { PLACERS[mode].load(); });
     }
   });
+
+  // Restart the app. It runs headless -- no Dock icon, no menu bar, no window
+  // to close -- so without this, picking up a change means hunting the process
+  // down in a terminal, which the app has no business asking of anyone.
+  // Placements are flushed first, because the reload at the end would otherwise
+  // throw away anything still only on screen.
+  (function () {
+    var btn = document.getElementById('restart');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      if (!window.confirm('Restart Overtone? Your work is saved first.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      window.__savePlacers().then(function () {
+        btn.textContent = 'Restarting…';
+        // The server exits mid-request by design, so this fetch failing is the
+        // normal path, not an error worth reporting.
+        return fetch('/restart', { method: 'POST' }).catch(function () {});
+      }).then(function () {
+        var tries = 0;
+        (function poll() {
+          tries++;
+          // `/ledgr` is the cheapest route that proves a server is answering.
+          fetch('/ledgr', { cache: 'no-store' })
+            .then(function () { window.location.reload(); })
+            .catch(function () {
+              if (tries < 80) return setTimeout(poll, 500);
+              btn.disabled = false;
+              btn.textContent = 'Restart';
+              window.alert('Overtone did not come back. See ' +
+                           '~/Library/Logs/chord-detect.log');
+            });
+        })();
+      }).catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = 'Restart';
+        window.alert('Could not save before restarting — ' + err.message);
+      });
+    });
+  })();
 
   // Upload to Ledgr. The button only appears when the server has a token, so
   // the common no-token case is a hidden button rather than a failed click.
@@ -997,14 +1082,19 @@ _NAV_JS = """
       btn.disabled = true;
       var label = btn.textContent;
       btn.textContent = 'Uploading…';
-      fetch('/ledgr/' + id, { method: 'POST' })
+      // Save first, exactly as the placement bar's own push does. This button
+      // sits above every tab and used to upload straight from disk, so chords
+      // placed and not yet saved were left out of the chart that went up --
+      // with nothing on screen saying so.
+      window.__savePlacers()
+        .then(function () { return fetch('/ledgr/' + id, { method: 'POST' }); })
         .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
         .then(function (res) {
           if (!res.ok) throw new Error(res.b.error || 'upload failed');
           // Opened rather than navigated to: you're usually still playing along
           // here, and losing the audio position to a page change is annoying.
           btn.textContent = 'Opened in Ledgr';
-          window.open(res.b.url, '_blank');
+          openInLedgr(res.b.url);
         })
         .catch(function (err) {
           btn.textContent = label;
@@ -1017,7 +1107,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 16
+RENDER_VERSION = 21
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -1503,7 +1593,28 @@ _TEMPLATE = """<!doctype html>
         c.el.classList.toggle('now', t >= c.start && t < c.end);
       }}
     }}
-    if (!audio.paused) requestAnimationFrame(update);
+  }}
+
+  // The playhead used to be driven by a self-perpetuating rAF chain: the last
+  // line of update() scheduled the next frame. Smooth, but it only survives if
+  // nothing ever interrupts it -- and two things do. Browsers suspend rAF in a
+  // background tab, and a throw anywhere inside update() ends the chain for
+  // good. Either way the audio plays on while the display stops dead, so the
+  // chart reads as drifting out of sync with the song, and stays that way until
+  // the next play/pause restarts it.
+  //
+  // So: the chain is restartable and refuses to run two at once, the next frame
+  // is scheduled in a `finally` so a throw can't kill it, it's restarted
+  // whenever the page becomes visible again, and `timeupdate` drives it too --
+  // coarse at roughly 4/sec, but it fires when rAF doesn't and can recover the
+  // display on its own.
+  var frame = 0;
+  function pump() {{
+    if (frame) return;
+    frame = requestAnimationFrame(function () {{
+      frame = 0;
+      try {{ update(); }} finally {{ if (!audio.paused) pump(); }}
+    }});
   }}
 
   function showSuggestions(t) {{
@@ -1535,13 +1646,22 @@ _TEMPLATE = """<!doctype html>
   audio.addEventListener('play', function () {{
     playBtn.innerHTML = '&#10073;&#10073;';
     suggest.hidden = true;
-    requestAnimationFrame(update);
+    pump();
   }});
   audio.addEventListener('pause', function () {{
     playBtn.innerHTML = '&#9654;';
     showSuggestions(audio.currentTime || 0);
   }});
-  audio.addEventListener('timeupdate', function () {{ if (audio.paused) update(); }});
+  // Unconditional, unlike before: while playing this is the backstop that
+  // notices the rAF chain has died and starts it again.
+  audio.addEventListener('timeupdate', function () {{
+    update();
+    if (!audio.paused) pump();
+  }});
+  // Coming back to a backgrounded tab is exactly when the chain is found dead.
+  document.addEventListener('visibilitychange', function () {{
+    if (!document.hidden && !audio.paused) pump();
+  }});
   audio.addEventListener('loadedmetadata', function () {{
     durEl.textContent = fmt(audio.duration);
   }});
@@ -1569,6 +1689,21 @@ _TEMPLATE = """<!doctype html>
   document.getElementById('fwd').addEventListener('click', function () {{
     audio.currentTime = Math.min(audio.duration || 0, (audio.currentTime || 0) + 5); update();
   }});
+  // Say what each family costs before it's chosen. A family is only playable if
+  // you actually put the capo where it says: G shapes for a song sounding in E
+  // means capo 9, and played anywhere else those chords are three semitones off
+  // the recording -- which reads as "the chart stopped matching the song"
+  // rather than as a capo you didn't fit. The number is the whole warning.
+  function labelShapes() {{
+    var sel = document.getElementById('shapes');
+    Array.prototype.forEach.call(sel.options, function (opt) {{
+      if (!opt.value) return;
+      var need = capoForShape(opt.value);
+      opt.textContent = opt.value + ' shapes \\u00b7 capo ' + need +
+                        (need > {max_capo} ? ' (high)' : '');
+    }});
+  }}
+
   document.getElementById('shapes').addEventListener('change', function (event) {{
     var shape = event.target.value;
     if (!shape) {{ capo = 0; applyCapo(); return; }}
@@ -1612,6 +1747,7 @@ _TEMPLATE = """<!doctype html>
     }}
   }});
 
+  labelShapes();
   applyCapo();
   update();
 {navjs}

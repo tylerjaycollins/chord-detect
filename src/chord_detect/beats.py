@@ -61,7 +61,7 @@ def _resolve_device(requested: str | None) -> str:
 
 
 def _track_beat_this(clip: AudioClip, *, device: str | None) -> BeatGrid:
-    from beat_this.inference import File2Beats
+    from beat_this.inference import Audio2Beats
 
     resolved = _resolve_device(requested=device)
     # torch.hub prints a raw percentage stream while fetching weights on first
@@ -69,8 +69,11 @@ def _track_beat_this(clip: AudioClip, *, device: str | None) -> BeatGrid:
     # exceptions, so swallowing stdout here loses nothing.
     with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
         warnings.simplefilter("ignore")
-        tracker = File2Beats(checkpoint_path="final0", device=resolved, dbn=False)
-        beats, downbeats = tracker(str(clip.path))
+        # Hand it the samples we already decoded rather than the file path: its
+        # own loader can't read .m4a, which silently dropped those songs to the
+        # librosa fallback with no bar lines at all.
+        tracker = Audio2Beats(checkpoint_path="final0", device=resolved, dbn=False)
+        beats, downbeats = tracker(clip.samples, clip.sr)
 
     beats = np.asarray(beats, dtype=np.float64)
     downbeats = np.asarray(downbeats, dtype=np.float64)

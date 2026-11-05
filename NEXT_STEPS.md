@@ -634,6 +634,22 @@ being a separate mode: change the chord, then place it.
 
 ## Next up (start here)
 
+- [ ] **Time picker on the chart (4/4, 3/4, 6/8).** Tyler's ask, 2026-11-02.
+      Auto-detect is right on all 5 songs checked, but he knows the meter and
+      should be able to say so. Redraw bars from the stored `ticks` with
+      `meter.place_bars()`; no re-analysis needed. Pre-select the detected one.
+- [ ] **"Start a measure here."** Click a beat box to make it beat 1; the whole
+      grid shifts (`place_bars(..., phase=)`) and chords move with it. Tyler's
+      example: a faded D sat in the second box when it should have opened a bar.
+- [ ] **Re-analyse songs already in the library.** Only new uploads get the
+      locked grid; saved songs keep their old beats. Needs a "Re-analyse" action
+      (keep the old analysis.json as a backup, and check placement files still
+      line up). Done by hand for "I'm Waiting for Heaven v15.5" only, backup at
+      `analysis.before-locked-grid.json` in its cache folder.
+- [ ] **Show 6/8's 3+3 grouping?** Six boxes a bar now (Tyler counts all six).
+      A wider gap between boxes 3 and 4 would show the two big pulses at a
+      glance. Design change, so Tyler's call.
+
 - [ ] **Chord editing while placing.** The biggest remaining gap. Detection
       leaves extra chords, wrong chords, and chords the ear disagrees with, and
       Pinned currently offers no way to fix any of them mid-flow — you place
@@ -795,6 +811,144 @@ song → analyze with live progress → play along with the chart.
       run again — `ensure_model()` does this, but a manual `git pull` wouldn't.
 
 ## Done (recent)
+
+- **Beat grid locked to one time signature, with real 6/8 (2026-11-02).**
+  `meter.py`. The neural tracker wandered on 6/8 (0.6 s / 0.8 s cross-rhythms
+  instead of the 0.406 s eighth), so bars had uneven lengths, rows mixed 2 and
+  4 boxes, and chords sat mid-bar. Now: the eighth-note tick comes from the
+  onset autocorrelation, grouping in 3s vs 2s picks 6/8 vs 4/4 (3/4 when a
+  6-tick bar clearly beats 8), ticks are tracked with a tempo-held DP tracker,
+  bar lines go where chord changes fall, and chord changes snap onto the grid
+  (within one tick of a bar line -> the bar line; 1.5 ticks in 6/8, since
+  the recognizer often calls changes an eighth and a bit early, which left
+  them on beat 6). 6/8 counts all six eighths: six boxes a bar, tempo as the
+  eighth (148 on Waiting for Heaven). Falls back to the old grid if
+  the song isn't steady (tick spread > 25%). Waiting for Heaven: every bar 6
+  beats, 57/63 changes on beat 1 (rest are real passing chords). Checked on
+  He Who Knew No Sin, Do's and Don'ts (was bars of 2/3/4/6 beats, now steady
+  4/4), James Bellamy. ChordPro now writes `{time: 6/8}`.
+- **.m4a songs get the neural beat tracker again (2026-11-02).** beat_this's
+  own loader couldn't read .m4a, so those songs silently fell back to librosa
+  with no bar lines. It's now handed the decoded samples.
+- **Overtone moved to port 8770 (2026-11-02).** The test-prep quiz server also
+  uses 8765, and Overtone's launcher took "something answers on 8765" as itself
+  already running, so it opened the quiz folder instead.
+
+- **There's a Restart button now.** The app is `LSUIElement` — no Dock icon, no
+  menu bar, no window — so a running Overtone could not be restarted at all
+  short of finding the process in a terminal. Every fix therefore sat on disk
+  unused: a whole session's worth of work was invisible because the server
+  launched before it was still answering. `POST /restart` hands off to a
+  detached child that waits for the port to free and then starts a fresh
+  server, then exits (`os._exit`, so uvicorn doesn't wait on the response's own
+  connection). The nav button saves placements first, then polls until the new
+  server answers and reloads — so nothing is lost and the reload lands on a
+  freshly rendered chart. The relaunch sets `OVERTONE_NO_BROWSER=1`, since the
+  page asking for the restart is already open; without it every restart littered
+  another Safari tab. `RENDER_VERSION` → 21.
+  Worth remembering: cached artifacts (`chart.html`) plus a long-lived server
+  means "I fixed it" and "you're running it" are different claims. Check
+  `curl -s localhost:8770/chart/<id> | grep <new-code>` before believing a fix
+  is live.
+
+- **Playback now uses a seek-accurate copy of the song, not the uploaded mp3.**
+  The real cause of the playhead drift. An upload is usually a VBR mp3 whose
+  only seek index is a 100-entry Xing table — about 1% of the file, so on a
+  four-minute song a jump can land as much as two seconds from where it was
+  asked to, and it stays off until the next seek. Confirmed by the one test that
+  separates clock from seek: playing from 0 without touching anything stayed in
+  sync to the end of the song. `_playback_audio` transcodes once to `playback.m4a`
+  (MP4 carries a per-sample table, so seeking is exact), at upload time and
+  lazily for songs analyzed earlier; `/audio/{id}` prefers it and falls back to
+  the upload when ffmpeg is missing. Analysis still reads the original.
+  Measured: transcode is sample-aligned with the original (0.0 ms offset) and
+  seeks land at 0.0 ms across the song. ~2s to build, file about 10% larger.
+  Not measured: Safari's own seek behaviour — the improvement is inferred from
+  the container format. If drift survives this, that's the next thing to prove.
+
+- **The playhead stopped dead when you left the tab, and looked like drift.**
+  `update()` ended with `requestAnimationFrame(update)` — a chain that only
+  survives while nothing interrupts it. Browsers suspend rAF in a background
+  tab, and a throw anywhere inside `update()` ended it permanently. The audio
+  played on either way, so the chart read as "out of sync with the song" and
+  stayed that way until the next play/pause — which is why starting the song
+  over always fixed it, and why it kept coming back. `timeupdate` couldn't
+  help: it only called `update()` *while paused*.
+  Now: `pump()` owns the chain and won't run two at once, the next frame is
+  scheduled in a `finally` so a throw can't kill it, `visibilitychange`
+  restarts it on return to the tab, and `timeupdate` drives it unconditionally
+  as a ~4/sec backstop. `RENDER_VERSION` → 20.
+  If sync ever drifts *again* after this, that rules out the render loop and
+  points at the media element's own clock (mp3 seek accuracy) — a different
+  investigation, and this fix is what makes the distinction legible.
+
+- **The shapes selector says what each family costs.** Not the sync bug, but
+  found looking for it: picking "G shapes" for a song sounding in E silently set
+  capo 9, because `capoForShape` on the page has no `max_capo` guard the way
+  `choose_shapes` does. Options now read `G shapes · capo 9 (high)`, so the
+  price is visible before you pick. The deeper gap in
+  "Shape families / capo — known gaps" is still open: the page will still
+  cheerfully hand you a capo no guitar has.
+
+- **Placed chords landed on the wrong lines after any `x2` section.** This was
+  the real "my edits aren't reaching Ledgr": `_placed_chordpro` ran
+  `expand_repeats` over the lyrics before mapping placements onto lines, but the
+  Manual/Pinned view doesn't — it lists each line once. So `Bridge x2` inserted
+  8 lines the page never showed, and every line after it shifted by 8: chords
+  placed on Chorus 2 were written onto the repeated chorus above it, and Chorus
+  2 exported bare. Nothing was lost, and nothing was wrong with the upload — the
+  two sides just counted lines differently. The placed path now mirrors the
+  screen (`parse_lyrics` only); expanding repeats stays where it's actually
+  needed, in alignment, which has to walk the song as sung.
+  The general hazard: a placement is an *index*, so any disagreement between
+  `linesFrom()` in `render.py` and the server's line list corrupts placement
+  silently. The two differ in one more way — the default section label when a
+  sheet starts without a header (`Song` on the page, `Intro` on the server).
+  Harmless today, same failure mode tomorrow. Worth unifying.
+
+- **The push can no longer upload a chart you can see is newer than it.** Two
+  ways that happened: `save()` resolved the same whether the PUT succeeded or
+  failed, so a failed save dropped the "unsaved" mark and the push that followed
+  sent whatever was still on disk; and the nav "Upload to Ledgr" button — unlike
+  the placement bar's own "Push to Cloud" — never saved at all, so unsaved
+  placements were simply left out. `save()` now throws on a bad response and
+  keeps the view dirty, and both buttons flush every placement view first
+  (`window.__savePlacers`). Charts also open in Ledgr via a real anchor click
+  instead of `window.open`, which Safari treats as a popup and gives a small
+  chromeless window rather than a full tab. `RENDER_VERSION` → 18.
+  Still open: no proof of *which* of these bit on 2026-08-08. The item's
+  `updatedAt` matched the push to the second and the PATCH path demonstrably
+  applies the body, so the likeliest answer is a stale page rather than a stale
+  upload — but reading the revision history to settle it needs DB access this
+  session didn't have. If it recurs, that's the check: compare the revision at
+  the push timestamp against the local `.cho`.
+
+- **Overtone opens in Safari, not Chrome.** Both entry points named the
+  browser's default, which is Chrome here: `scripts/make_app.py`'s launcher
+  preferred Chrome's `--app` for a chromeless window, and `server.main()` used
+  plain `webbrowser.open`. Both now say Safari. The trade is the standalone
+  window — Safari has no `--app` equivalent, so it's a tab; Safari's *File > Add
+  to Dock* is the way to a real window, and the app already serves the icon for
+  it. The launcher keeps its "already running, just show it" promise with a bit
+  of AppleScript that raises the existing Overtone tab instead of stacking a new
+  one, falling back to a plain open if permission to drive Safari is refused.
+  Re-run `uv run python scripts/make_app.py` after touching the launcher — it's
+  baked into the bundle.
+
+- **The push to Ledgr now carries the capo and the shapes, not just the
+  chords.** The capo lived only in the page — chosen after the chart was built,
+  by the shapes selector or the ± control — so a chart placed in G shapes over a
+  D song arrived as bare G-family chords with nothing saying they were capo 7.
+  Saving placements now sends `capo` and the sounding key with them
+  (`render.py` `save()` → `put_placement`), and `_placed_chordpro` emits
+  `{key}`/`{capo}` from that, falling back to `render.json` for placement files
+  written before this. The aligned and CLI exports learned the same pairing via
+  `sounding_key=`.
+  The direction matters and is easy to get backwards: Ledgr reads the written
+  chords as the *shapes* and `{key}` as how the song *sounds*, deriving shapes
+  as key − capo (`keyOfCapo`; its capo control rewrites chords by the capo delta
+  to hold the key). So a D song in G shapes is `{key: D}{capo: 7}` — verified by
+  round-tripping the export through the vendored parser. `RENDER_VERSION` → 17.
 
 - **Backed up to a private GitHub repo** —
   `github.com/tylerjaycollins/chord-detect`. The existing `.gitignore` already

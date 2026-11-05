@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO / "src"))
 from chord_detect.icon import draw_icon  # noqa: E402  (needs sys.path above)
 APP_NAME = "Overtone"
 BUNDLE_ID = "local.overtone.app"
-PORT = 8765
+PORT = 8770
 
 LAUNCHER = """#!/bin/bash
 # Launcher for {app_name}. Starts the local server if it isn't already up,
@@ -39,19 +39,30 @@ PORT={port}
 LOG="$HOME/Library/Logs/chord-detect.log"
 mkdir -p "$(dirname "$LOG")"
 
-# Open in a standalone window rather than a browser tab. Chrome's --app drops
-# the address bar, tabs and bookmarks, so Overtone gets a window of its own that
-# cmd-tabs and sits in Mission Control like an app. Falls back to the default
-# browser when Chrome isn't installed -- a tab still works, it's just a tab.
+# Safari, explicitly -- not the default browser, which is how this ended up in
+# Chrome. Safari has no equivalent of Chrome's --app, so there's no chromeless
+# window to be had here; for one, use Safari's File > Add to Dock once, which
+# the served icon exists for. What we can still do is honour "already running,
+# just show it": raise the tab that's already open on Overtone rather than
+# adding another one on every launch. The AppleScript needs permission to
+# control Safari the first time (macOS asks); denying it just means the
+# fallback opens a fresh tab, which is the old behaviour.
 open_ui() {{
-  if [ -d "/Applications/Google Chrome.app" ]; then
-    open -na "Google Chrome" --args \
-      --app="http://127.0.0.1:$PORT/" \
-      --user-data-dir="$HOME/Library/Application Support/Overtone/window" \
-      >/dev/null 2>&1 || open "http://127.0.0.1:$PORT/"
-  else
-    open "http://127.0.0.1:$PORT/"
-  fi
+  osascript >/dev/null 2>&1 <<APPLESCRIPT || open -a Safari "http://127.0.0.1:$PORT/"
+tell application "Safari"
+  activate
+  repeat with w in windows
+    repeat with t in tabs of w
+      if URL of t starts with "http://127.0.0.1:$PORT/" then
+        set current tab of w to t
+        set index of w to 1
+        return
+      end if
+    end repeat
+  end repeat
+  open location "http://127.0.0.1:$PORT/"
+end tell
+APPLESCRIPT
 }}
 
 # Already running? Just show it.

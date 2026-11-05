@@ -206,12 +206,15 @@ def main(
             analysis,
             chordpro_out,
             capo=capo,
+            # Transposed into the shapes above, so the key to write down is the
+            # one it still sounds in.
+            sounding_key=original_key if shift else None,
             measures_per_section=16,
         )
         console.print(f"[green]Wrote[/green] {chordpro_out}")
 
     if upload_ledgr:
-        _upload_to_ledgr(analysis, capo)
+        _upload_to_ledgr(analysis, capo, original_key if shift else None)
 
     if suggest_at is not None:
         _print_suggestions(audio, analysis, suggest_at, shift)
@@ -220,9 +223,13 @@ def main(
         _print_progressions(analysis)
 
 
-def _upload_to_ledgr(analysis: Analysis, capo: int) -> None:
+def _upload_to_ledgr(
+    analysis: Analysis, capo: int, sounding_key: str | None = None
+) -> None:
     """Send the chart to Ledgr, reporting the item URL or why it didn't go."""
-    source = to_chordpro(analysis, capo=capo, measures_per_section=16)
+    source = to_chordpro(
+        analysis, capo=capo, sounding_key=sounding_key, measures_per_section=16
+    )
     try:
         result = ledgr.upload_song(source, title=Path(analysis.path).stem)
     except ledgr.LedgrError as err:
@@ -233,7 +240,7 @@ def _upload_to_ledgr(analysis: Analysis, capo: int) -> None:
 
 def _print_summary(analysis: Analysis, shift: int) -> None:
     minutes, seconds = divmod(int(analysis.duration), 60)
-    meter = f"{analysis.meter}/4" if analysis.meter else "unknown"
+    meter = analysis.signature or "unknown"
     confidence_note = "" if analysis.key_confidence >= 0.15 else " [dim](low)[/dim]"
 
     lines = [

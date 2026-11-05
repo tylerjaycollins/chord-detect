@@ -69,11 +69,12 @@ def main(
         "--chordpro",
         help="Write ChordPro (bar notation) for import into Ledgr.",
     ),
-    upload_ledgr: bool = typer.Option(
+    send_ledgr: bool = typer.Option(
         False,
-        "--upload-ledgr",
-        help="Push the chart straight into Ledgr as a song. Needs an "
-        "api-scoped LEDGR_API_TOKEN; LEDGR_URL overrides the target.",
+        "--send-ledgr",
+        help="Save the chart as ~/Music/Overtone/<song>.cho and open it in "
+        "Ledgr on this Mac, which makes the song (or updates it, if that file "
+        "was sent before).",
     ),
     chart: bool = typer.Option(
         True, "--chart/--no-chart", help="Print a measure-grouped chart."
@@ -213,8 +214,8 @@ def main(
         )
         console.print(f"[green]Wrote[/green] {chordpro_out}")
 
-    if upload_ledgr:
-        _upload_to_ledgr(analysis, capo, original_key if shift else None)
+    if send_ledgr:
+        _send_to_ledgr(analysis, capo, original_key if shift else None)
 
     if suggest_at is not None:
         _print_suggestions(audio, analysis, suggest_at, shift)
@@ -223,19 +224,25 @@ def main(
         _print_progressions(analysis)
 
 
-def _upload_to_ledgr(
+def _send_to_ledgr(
     analysis: Analysis, capo: int, sounding_key: str | None = None
 ) -> None:
-    """Send the chart to Ledgr, reporting the item URL or why it didn't go."""
+    """Send the chart to Ledgr as a .cho file, saying where it went or why not.
+
+    From the terminal there's no song folder to remember the file in, so the
+    file is named for the song and overwritten each time: the same song sent
+    again updates the same Ledgr song.
+    """
     source = to_chordpro(
         analysis, capo=capo, sounding_key=sounding_key, measures_per_section=16
     )
+    path = ledgr.SEND_DIR / ledgr.file_name(Path(analysis.path).stem)
     try:
-        result = ledgr.upload_song(source, title=Path(analysis.path).stem)
+        ledgr.send(source, path)
     except ledgr.LedgrError as err:
-        console.print(f"[red]Ledgr upload failed[/red] — {err}")
+        console.print(f"[red]Send to Ledgr didn't work[/red] — {err}")
         raise typer.Exit(1) from err
-    console.print(f"[green]Uploaded to Ledgr[/green] {result.url}")
+    console.print(f"[green]Sent to Ledgr[/green] {path}")
 
 
 def _print_summary(analysis: Analysis, shift: int) -> None:

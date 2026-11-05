@@ -361,7 +361,8 @@ def _render_grid(rows: list[Row], analysis: Analysis, shift: int = 0) -> str:
 _NAV = """<nav class="nav">
   <a class="navlink" href="/">&#8592; New song</a>
   <select class="navsel" id="songswitch"><option value="">Recent songs…</option></select>
-  <button class="navlink right" id="toledgr" hidden>Upload to Ledgr</button>
+  <button class="navlink right" id="toledgr" hidden
+          title="Saves this chart as a .cho file in Music/Overtone and opens it in Ledgr. Sending again updates the same song.">Send to Ledgr</button>
   <a class="navlink right" id="chodl" href="#" download>Download .cho</a>
   <button class="navlink right" id="restart"
           title="Relaunch the app so code changes take effect">Restart</button>
@@ -680,7 +681,7 @@ _NAV_JS = """
       var tail = '<span class="pcount">' + count + ' placed' +
                  (dirty ? ' &middot; <b>unsaved</b>' : '') + '</span>' +
                  '<button class="small" data-act="save">Save</button>' +
-                 '<button class="small go" data-act="push">Push to Cloud</button>';
+                 '<button class="small go" data-act="push">Send to Ledgr</button>';
 
       if (mode === 'pinned') {
         var live = chordAt(audio.currentTime || 0);
@@ -844,22 +845,15 @@ _NAV_JS = """
       if (!btn) return;
       var act = btn.dataset.act;
       if (act === 'save') save();
-      // Save first, then push -- pushing what's on disk while the screen holds
+      // Save first, then send -- sending what's on disk while the screen holds
       // newer placements would send a chart you can see is out of date.
       if (act === 'push') {
-        btn.textContent = 'Pushing…';
-        save().then(function () {
-          return fetch('/ledgr/' + songId, { method: 'POST' })
-            .then(function (r) {
-              return r.json().then(function (b) { return { ok: r.ok, b: b }; });
-            });
-        }).then(function (res) {
-          if (!res.ok) throw new Error(res.b.error || 'push failed');
-          btn.textContent = res.b.updated ? 'Updated ✓' : 'Created ✓';
-          openInLedgr(res.b.url);
+        btn.textContent = 'Sending…';
+        save().then(function () { return sendToLedgr(songId); }).then(function (b) {
+          btn.textContent = b.again ? 'Updated in Ledgr ✓' : 'Sent to Ledgr ✓';
         }).catch(function (err) {
-          btn.textContent = 'Push to Cloud';
-          window.alert('Push failed — ' + err.message);
+          btn.textContent = 'Send to Ledgr';
+          window.alert('Send to Ledgr didn’t work. ' + err.message);
         });
       }
       if (act === 'place') {
@@ -949,18 +943,16 @@ _NAV_JS = """
     };
   }
 
-  // Open a chart in Ledgr. A real link click rather than window.open: Safari
-  // treats window.open as a popup and hands it a small chromeless window, which
-  // is not how you want to read the song you just pushed. An anchor gets opened
-  // the way any other link would -- a full tab.
-  function openInLedgr(url) {
-    var a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  // Send to Ledgr: the server writes the chart to ~/Music/Overtone/<title>.cho
+  // and opens it in Ledgr on this Mac, which makes the song, or replaces its
+  // chart when the same song is sent again. Answers {file, name, again}.
+  function sendToLedgr(id) {
+    return fetch('/ledgr/' + id, { method: 'POST' })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.b.error || 'Something went wrong.');
+        return res.b;
+      });
   }
 
   // Section markers are [Verse 1] style; everything else is a sung line.
@@ -1047,58 +1039,35 @@ _NAV_JS = """
     });
   })();
 
-  // Upload to Ledgr. The button only appears when the server has a token, so
-  // the common no-token case is a hidden button rather than a failed click.
+  // Send to Ledgr, in the top bar. Shown always; when this Mac's Ledgr can't
+  // open song files yet, a click says how to fix that instead of failing.
   fetch('/ledgr').then(function (r) { return r.json(); }).then(function (cfg) {
     var btn = document.getElementById('toledgr');
     if (!btn) return;
     var id = window.location.pathname.split('/').pop();
     btn.hidden = false;
-    // Shown even without a token, with the setup step as the tooltip. Hiding it
-    // made the feature invisible rather than obviously-not-configured.
-    if (!cfg.configured) {
-      btn.textContent = "Ledgr not connected";
-      btn.title = "Needs an api-scoped LEDGR_API_TOKEN. Target: " + cfg.target;
+    if (!cfg.available) {
       btn.addEventListener('click', function () {
-        window.alert(
-          [
-            "Ledgr isn't connected yet.",
-            "",
-            "1. In the Ledgr repo:",
-            "     node scripts/make-token.mjs overtone api",
-            "2. Put the printed entry in LEDGR_API_TOKENS (Vercel + .env.local)",
-            "   and redeploy. The entry holds a HASH, not the token.",
-            "3. Set LEDGR_API_OWNER_UPN on the Ledgr server.",
-            "4. Start Overtone with the raw token it printed once:",
-            "     LEDGR_API_TOKEN=lgr_... uv run chord-detect-app",
-            "",
-            "Target: " + cfg.target + "   (override with LEDGR_URL)"
-          ].join("\\n"));
+        window.alert("This Mac's Ledgr can't open song files yet. Update Ledgr " +
+                     "(in ledgr-rs: sh tools/mac-app.sh), then press Send to Ledgr again.");
       });
       return;
     }
-    btn.title = 'Send this chart to ' + cfg.target;
     btn.addEventListener('click', function () {
       btn.disabled = true;
-      var label = btn.textContent;
-      btn.textContent = 'Uploading…';
-      // Save first, exactly as the placement bar's own push does. This button
-      // sits above every tab and used to upload straight from disk, so chords
-      // placed and not yet saved were left out of the chart that went up --
-      // with nothing on screen saying so.
+      btn.textContent = 'Sending…';
+      // Save first, as the placement bar's own Send does: chords placed and
+      // not yet saved would otherwise be left out of what Ledgr gets.
       window.__savePlacers()
-        .then(function () { return fetch('/ledgr/' + id, { method: 'POST' }); })
-        .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, b: b }; }); })
-        .then(function (res) {
-          if (!res.ok) throw new Error(res.b.error || 'upload failed');
-          // Opened rather than navigated to: you're usually still playing along
-          // here, and losing the audio position to a page change is annoying.
-          btn.textContent = 'Opened in Ledgr';
-          openInLedgr(res.b.url);
+        .then(function () { return sendToLedgr(id); })
+        .then(function (b) {
+          btn.textContent = b.again ? 'Updated in Ledgr ✓' : 'Sent to Ledgr ✓';
+          btn.title = 'Saved as ' + b.file + ', opened in Ledgr. Sending again updates the same song.';
+          setTimeout(function () { btn.textContent = 'Send to Ledgr'; }, 4000);
         })
         .catch(function (err) {
-          btn.textContent = label;
-          window.alert('Ledgr upload failed — ' + err.message);
+          btn.textContent = 'Send to Ledgr';
+          window.alert('Send to Ledgr didn’t work. ' + err.message);
         })
         .finally(function () { btn.disabled = false; });
     });
@@ -1107,7 +1076,7 @@ _NAV_JS = """
 
 # Bump when the template or player changes, so the server's cache serves a
 # freshly rendered chart instead of one built by older code.
-RENDER_VERSION = 21
+RENDER_VERSION = 22
 
 _TEMPLATE = """<!doctype html>
 <html lang="en">

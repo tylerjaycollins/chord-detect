@@ -515,27 +515,22 @@ in-app editor uses, so the surface can't drift from Ledgr's contract.
       be `api`-scoped (`verifyApiToken` requires it — an `mcp`-scoped token is
       rejected), and the target is `https://ledgr-sandy.vercel.app`, overridable
       via `LEDGR_URL` for testing against `localhost:3001`.
-- [ ] **Send songs to the local Rust Ledgr as a `.cho` file (Tyler, 2026-11-05).**
-      Tyler daily-drives the Rust Ledgr now; Upload to Ledgr still posts to
-      Ledgr 1 (`ledgr-sandy`), which he no longer uses. Plan, in order:
-      1. **Ledgr opens `.cho`** (ledgr-rs queue entry 49, D-377): opening a
-         `.cho` from Finder makes a Song, and opening the same file again
-         replaces its chart. Overtone's `.cho` is already Ledgr's own song
-         shape (`{section:}`, bars, `[G]words`), so no separate `.md` is needed.
-      2. **Overtone's side (S):** replace Upload to Ledgr with "Send to Ledgr":
-         write the `.cho` to one fixed place per song (e.g.
-         `~/Music/Overtone/<title>.cho`, overwritten on each send, so Ledgr
-         sees the same file and updates the song) and `open -a Ledgr` on it.
-         Show the button only once `Ledgr.app`'s Info.plist claims `.cho`, so
-         it appears by itself when step 1 ships. Retire `ledgr.py` and the
-         token setup then. The button code sits in `render.py` beside the
-         uncommitted 11-02 edits; commit or settle those first.
-      3. **Later:** Ledgr's local MCP (`ledgr-mcp`), if the file hand-off
-         proves clumsy.
-- [ ] Decide what re-uploading the same song does. Creating a second item every
-      time is the wrong default once corrections start round-tripping; matching
-      on title and updating is probably right, but it needs a deliberate choice
-      rather than falling out of the implementation.
+- [x] **Send songs to the local Rust Ledgr as a `.cho` file (Tyler, 2026-11-05). Built 2026-11-05.**
+      Ledgr 0.33.0 opens `.cho` files (ledgr-rs D-377): a Song is made, and
+      opening the same file again replaces its chart (title and Notes kept).
+      Overtone's "Upload to Ledgr" and the placing bar's "Push to Cloud" are
+      now **Send to Ledgr**: the chart goes to `~/Music/Overtone/<title>.cho`
+      (remembered per song in `ledgr.json`, so a resend overwrites the same
+      file) and `open -a Ledgr` opens it. If the installed Ledgr can't open
+      `.cho`, the button says how to update it. CLI: `--send-ledgr` replaces
+      `--upload-ledgr`. The Ledgr 1 upload code and its token are gone
+      (`~/.config/overtone/config.json` is no longer read; delete it when you
+      like). Tested end to end 2026-11-05 with "Gospel Scare v7": one song in
+      Ledgr, a second send updated it.
+      - [ ] Later: Ledgr's local MCP (`ledgr-mcp`), only if the file hand-off
+            proves clumsy.
+- [x] Decide what re-uploading the same song does: it updates the same Ledgr
+      song (each song keeps one file; Ledgr matches by file). 2026-11-05.
 - [ ] Section detection would make the handoff much better — the export
       currently emits `Chart 1`, `Chart 2` … in 16-measure blocks, which is
       arbitrary. Real verse/chorus labels would drop straight into Ledgr's

@@ -18,8 +18,13 @@ no browser tab. At launch it picks a free port, starts this repo's server on it
 from `.venv` (no `uv` needed at launch), and quitting the app stops the server.
 It runs this repo rather than a frozen copy, so Python edits take effect on the
 next launch or the page's Restart button; rebuild only when `desktop/` changes.
-Downloads land in `~/Downloads` and show in Finder; links to Ledgr open in your
-browser. Logs go to `~/Library/Logs/chord-detect.log`.
+Downloads land in `~/Downloads` and show in Finder. Logs go to
+`~/Library/Logs/chord-detect.log`.
+
+**Send to Ledgr** saves the chart as `~/Music/Overtone/<song>.cho` and opens it
+in the Ledgr app on this Mac (0.33.0 or later), which makes it a song. Sending
+the same song again overwrites that file, and Ledgr updates the same song's
+chart instead of adding a second one. No token or web API involved.
 
 `scripts/make_app.py` builds the older Safari-tab launcher; it's superseded.
 
@@ -39,6 +44,7 @@ uv run chord-detect song.mp3 --transpose -3      # shift the whole chart
 uv run chord-detect song.mp3 --json out.json     # full analysis for other tools
 uv run chord-detect song.mp3 --html chart.html   # printable chart + beat grid
 uv run chord-detect song.mp3 --chordpro s.cho    # ChordPro, for import into Ledgr
+uv run chord-detect song.mp3 --send-ledgr       # straight into the Ledgr app
 uv run chord-detect song.mp3 --suggest-at 1:24   # what chords fit at this point
 uv run chord-detect song.mp3 --progressions      # progressions that fit the key
 ```

@@ -409,11 +409,11 @@ def audio(job_id: str) -> FileResponse:
 
 @app.get("/chordpro/{job_id}")
 def chordpro(job_id: str):
-    """The ChordPro for this song -- the same text the Ledgr upload sends.
+    """The ChordPro for this song -- the same text Send to Ledgr sends.
 
     Hand-placed chords win over automatic alignment, which wins over bar
     notation. Deliberately the same order the upload uses: a download that
-    disagreed with what got uploaded would be worse than no download.
+    disagreed with what got sent would be worse than no download.
     """
     folder = CACHE / job_id
     name_file = folder / "name.txt"
@@ -893,63 +893,50 @@ def _bars_line(text: str) -> str:
 
 @app.post("/ledgr/{job_id}")
 def to_ledgr(job_id: str) -> JSONResponse:
-    """Push a built chart into Ledgr as a song item.
+    """Send a built chart to Ledgr on this Mac, as a `.cho` file it opens.
 
-    Uploads the `.cho` already on disk rather than re-rendering, so what lands
-    in Ledgr is exactly what the "Download .cho" link would have given you.
+    The same text "Download .cho" gives: hand-placed chords win, then
+    automatic alignment, then bar notation. The file goes to
+    `~/Music/Overtone/<title>.cho`, and each song keeps its file (remembered in
+    `ledgr.json`), so sending again overwrites it and Ledgr replaces that
+    song's chart rather than making a second song (ledgr-rs D-377).
     """
-    path = CACHE / job_id / "song.cho"
+    folder = CACHE / job_id
+    path = folder / "song.cho"
     if not path.exists():
         raise HTTPException(404, "Not built yet")
 
-    name_file = CACHE / job_id / "name.txt"
+    name_file = folder / "name.txt"
     title = name_file.read_text().strip() if name_file.exists() else job_id
 
-    # Prefer chords positioned over words. That's the whole point of alignment,
-    # and it's what saves the work in Ledgr; bar notation is the fallback when
-    # a song has no lyrics or hasn't been aligned.
-    # Hand-placed chords win: they're what the user actually decided. Automatic
-    # alignment is the fallback, and bar notation the fallback to that.
     source = path.read_text()
     for build in (_placed_chordpro, _aligned_chordpro):
-        candidate = build(CACHE / job_id, title)
+        candidate = build(folder, title)
         if candidate:
             source = candidate
             break
 
-    # Remember which Ledgr item this song became, so pushing again rewrites the
-    # chart instead of leaving a trail of near-identical songs to tidy up.
-    link_file = CACHE / job_id / "ledgr.json"
-    known = None
+    link_file = folder / "ledgr.json"
+    remembered = None
     if link_file.exists():
         try:
-            known = json.loads(link_file.read_text()).get("item_id")
+            saved = json.loads(link_file.read_text()).get("file")
+            remembered = Path(saved) if saved else None
         except ValueError:
-            known = None
+            remembered = None
 
+    target = ledgr.song_file(title, remembered)
+    again = remembered == target and target.exists()
     try:
-        if known:
-            try:
-                result = ledgr.update_song(known, source, title=title)
-            except ledgr.LedgrError:
-                # The item was deleted in Ledgr, or belongs to another instance.
-                # Falling back to create beats refusing to push at all.
-                result = ledgr.upload_song(source, title=title)
-        else:
-            result = ledgr.upload_song(source, title=title)
+        ledgr.send(source, target)
     except ledgr.LedgrError as err:
-        # 502, not 500: the failure is Ledgr's answer (or its absence), not a
-        # bug here, and the message is already written for a human to act on.
+        # 502, not 500: the failure is Ledgr's (or its absence), not a bug
+        # here, and the message is already written for a person to act on.
         return JSONResponse({"error": str(err)}, status_code=502)
 
-    link_file.write_text(
-        json.dumps({"item_id": result.item_id, "url": result.url,
-                    "target": ledgr.base_url()})
-    )
-    return JSONResponse(
-        {"url": result.url, "title": result.title,
-         "updated": bool(known) and result.item_id == known}
-    )
+    # Old Ledgr 1 links ({"item_id", "url"}) are replaced: that Ledgr is retired.
+    link_file.write_text(json.dumps({"file": str(target)}))
+    return JSONResponse({"file": str(target), "name": target.name, "again": again})
 
 
 # The desktop app (desktop/) picks a free port at launch and passes it here, so
@@ -1004,8 +991,9 @@ def restart() -> JSONResponse:
 
 @app.get("/ledgr")
 def ledgr_status() -> JSONResponse:
-    """Whether a token is configured, so the page can hide the button."""
-    return JSONResponse({"configured": ledgr.configured(), "target": ledgr.base_url()})
+    """Whether this Mac's Ledgr can open song files, so the button can say so."""
+    return JSONResponse({"available": ledgr.ledgr_app() is not None,
+                         "folder": str(ledgr.SEND_DIR)})
 
 
 @app.get("/icon.png")

@@ -166,7 +166,7 @@ fn wait_then_load(window: WebviewWindow, port: u16) {
     }
 }
 
-/// Open a link in the person's browser (Ledgr links, anything off-app).
+/// Open a link in the person's browser (anything off-app).
 fn open_in_browser(url: &Url) {
     let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
 }
@@ -224,8 +224,8 @@ fn build_window(app: &tauri::App, port: u16) -> tauri::Result<WebviewWindow> {
             }
             inside
         })
-        // "Open in Ledgr" uses target=_blank: send it to the browser rather
-        // than spawning a bare second window.
+        // A link with target=_blank goes to the browser rather than
+        // spawning a bare second window.
         .on_new_window(move |url, _features| {
             if url.as_str().starts_with(&server_origin) {
                 NewWindowResponse::Allow
